@@ -1,0 +1,31 @@
+[package]
+name = "quick_resequencing"
+version = "0.1.0"
+edition = "2024"
+
+
+[workspace]
+members = [
+    "linux_tcp_sorter",
+    "quiche",
+    "quicgo_sorter"
+]
+
+
+[dependencies]
+linux_tcp_sorter = { path = "linux_tcp_sorter", version = "0.1.0", features = ["bench"] }
+quicgo_sorter    = { path = "quicgo_sorter",    version = "0.1.0", features = ["bench"] }
+quiche          = { path = "quiche",          version = "0.22.0", features = ["bench"] }
+rand = "0.9.0"
+rand_distr = "0.5.1"
+
+
+[dev-dependencies]
+criterion = { version = "0.8.0", features = ["html_reports"] }
+rand = "0.9.0"
+rand_distr = "0.5.1"
+
+
+[[bench]]
+name = "resequencing_bench"
+harness = false

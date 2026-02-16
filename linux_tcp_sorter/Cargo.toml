@@ -1,0 +1,13 @@
+[package]
+name = "linux_tcp_sorter"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+libc = "0.2.178"
+bindgen = "0.72.1"
+intrusive-collections = "0.10.0"
+
+
+[features]
+bench = []
