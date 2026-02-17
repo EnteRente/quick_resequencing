@@ -73,7 +73,9 @@ impl RecvBuffer for TcpOfoQueue {
     fn is_ready(&self) -> bool {
         self.ready()
     }
-    fn drain(&mut self) -> bool { true }
+    fn drain(&mut self) -> bool {
+        TcpOfoQueue::drain(self)
+    }
 
     fn name() -> &'static str { "linux_tcp" }
 }
