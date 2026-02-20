@@ -1,7 +1,5 @@
 use rand::Rng;
-use rand_distr::{Normal, Distribution};
-
-const SEED: u64 = 1; //TODO
+use rand_distr::{Uniform, Normal, Distribution};
 const DEVIATION: f64 = 2.0;
 
 #[derive(Debug, Clone)]
@@ -130,7 +128,7 @@ impl OrderGenerator for EdgeSwapGenerator {
 pub struct BurstsGenerator {
     min_burst: usize,
     max_burst: usize,
-    jitter_d: f64,
+    jitter_d: f64, //TODO
 }
 
 
@@ -194,7 +192,7 @@ impl OrderGenerator for BurstsGenerator {
 
 #[derive(Debug, Clone)]
 pub struct JitterGenerator {
-    jitter_d: f64,
+    jitter_d: f64, //TODO: use normal distribution instead of standard deviation
 }
 
 impl JitterGenerator {
