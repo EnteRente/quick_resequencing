@@ -99,24 +99,24 @@ impl OrderGenerator for InOrderGenerator {
     fn name(&self) -> &str { "InOrder" }
 }
 
-/// Worst case: swap first and last packet
+/// Simulates that the first packet is lost and retransmitted (appended to the end of the vector)
 #[derive(Debug, Clone)]
-pub struct EdgeSwapGenerator {
+pub struct FirstToLastGenerator {
 }
 
-impl EdgeSwapGenerator {
+impl FirstToLastGenerator {
     pub fn new() -> Self { Self {} }
 }
 
-impl OrderGenerator for EdgeSwapGenerator {
+impl OrderGenerator for FirstToLastGenerator {
     fn generate(&self, config: &GeneratorConfig) -> Vec<u64> {
-        let mut vec = Vec::with_capacity(config.packet_count);
-        vec.push(config.packet_count as u64);
-        let vec_rest: Vec<u64> = (1..(config.packet_count-1) as u64).collect();
-        [vec, vec_rest].concat()
+        let mut vec: Vec<u64> = (2..config.packet_count as u64).collect();
+        vec.push(1);
+
+        vec
     }
 
-    fn name(&self) -> &str { "EdgeSwap" }
+    fn name(&self) -> &str { "FirstToLast" }
 }
 
 
@@ -266,7 +266,7 @@ impl Default for GeneratorRegistry {
     fn default() -> Self { //TODO
         let mut registry = Self::new();
         registry.register(InOrderGenerator::new());
-        registry.register(EdgeSwapGenerator::new());
+        registry.register(FirstToLastGenerator::new());
         registry.register(BurstsGenerator::new(5, 10, DEVIATION));
         registry.register(JitterGenerator::new(DEVIATION));
 
