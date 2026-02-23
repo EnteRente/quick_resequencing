@@ -9,13 +9,10 @@ use quicgo_sorter::QuicGoFrameSorter;
 use linux_tcp_sorter::TcpOfoQueue;
 
 
-
-// Frame sizes for "realistic" benchmarks
-// 64B, 256B, 1200B, 1460B and 4096B -> represent fragmentation
 const PACKET_SIZE: usize = 1200; // Assumption
 const NUM_OF_PACKETS: [usize; 5] = [100, 1_000, 10_000, 100_000, 1_000_000];
 
-// For repeatable benchmarks -> not in use yet
+// For repeatable benchmarks (not in use yet)
 const SEED: u64 = 1;
 
 
@@ -36,7 +33,6 @@ macro_rules! bench_implementations {
     };
 }
 
-// Add Implementations to be benched in here
 fn bench_config(
     group: &mut criterion::BenchmarkGroup<criterion::measurement::WallTime>,
     benchmark_data: &BenchmarkData,
@@ -45,7 +41,7 @@ fn bench_config(
 
     let bench_id = format!("{}/{}", generator_name, num_of_packets);
 
-    bench_implementations!(
+    bench_implementations!( // Add Implementations to be benched in here
         group,
         bench_id,
         benchmark_data,
@@ -56,12 +52,12 @@ fn bench_config(
 }
 
 
-/// Benchmark the data structure as specified in _bench_data_ field
+/// Benchmark the receive buffer under test.
+/// Insert and drain in a loop
 fn bench_recv_buf<T: RecvBuffer>(recv_buf: &mut T, bench_data: &BenchmarkData) {
 
-    // Insert data
     for packet in bench_data.get_packets() {
-        let payload = packet.get_payload(); // cloning?
+        let payload = packet.get_payload();
         let offset = packet.get_offset();
 
         // Try inserting data into the buffer
@@ -69,7 +65,7 @@ fn bench_recv_buf<T: RecvBuffer>(recv_buf: &mut T, bench_data: &BenchmarkData) {
 
         // Drain all drainable data
         while recv_buf.is_ready() {
-            if recv_buf.drain() { // Returns error
+            if recv_buf.drain() {
                 break;
             }
         }
@@ -86,12 +82,12 @@ fn bench_main(c: &mut Criterion) {
     let generator_register = GeneratorRegistry::default();
 
     for packet_count in NUM_OF_PACKETS {
-        // Set the input size for the benchmark
+        // Configure settings
         let config = GeneratorConfig::new(PACKET_SIZE, packet_count, Some(SEED));
         group.throughput(Throughput::Bytes(config.total_bytes()));
 
         for generator in generator_register.iter() {
-            // Generate Data
+            // Generate data
             let benchmark_data = generator.generate_packets(&config);
 
             bench_config(
