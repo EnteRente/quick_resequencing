@@ -1,6 +1,8 @@
 use rand::Rng;
 use rand_distr::{Uniform, Normal, Distribution};
+
 const DEVIATION: f64 = 2.0;
+const ERROR_PROBABILITY: f64 = 0.2;
 
 #[derive(Debug, Clone)]
 pub struct Packet {
@@ -18,7 +20,7 @@ impl Packet {
 }
 
 
-/// Holding structure for the test data
+/// Holding structure for the test sequence
 #[derive(Debug, Clone)]
 pub struct BenchmarkData {
     packets: Vec<Packet>,
@@ -26,6 +28,7 @@ pub struct BenchmarkData {
 
 impl BenchmarkData {
 
+    /// Create the benchmark sequence from order
     pub fn from_order(packet_order: Vec<u64>, packet_size: usize) -> Self {
         let packets = packet_order
             .into_iter()
@@ -40,7 +43,7 @@ impl BenchmarkData {
         Self { packets }
     }
 
-    /// Test data from explicit packets (for more complex scenarios like overlapping)
+    /// Create the benchmark sequence from packets
     pub fn from_packet(packets: Vec<Packet>, length: usize) -> Self {
         Self { packets }
     }
@@ -69,11 +72,11 @@ impl GeneratorConfig {
 }
 
 
-/// Helper trait: Generators that just create a sequence of order
+/// Generators that create a sequence of numbers
 pub trait OrderGenerator: Send + Sync {
     fn generate(&self, config: &GeneratorConfig) -> Vec<u64>;
 
-    // Generator that allows more specific behavior (like overlapping offset)
+    /// Generator that allows more specific behavior (like overlapping offset)
     fn generate_packets(&self, config: &GeneratorConfig) -> BenchmarkData {
         let order = self.generate(config);
         BenchmarkData::from_order(order, config.packet_size)
@@ -119,7 +122,42 @@ impl OrderGenerator for FirstToLastGenerator {
     fn name(&self) -> &str { "FirstToLast" }
 }
 
+/// Generate packets with a given probability of being lost.
+/// When a packet is "lost", it is appended at the end.
+pub struct RandomLossGenerator {
+    p: f64
+}
 
+
+impl RandomLossGenerator {
+    pub fn new(p: f64) -> Self { Self { p } }
+}
+
+impl OrderGenerator for RandomLossGenerator {
+    fn generate(&self, config: &GeneratorConfig) -> Vec<u64> {
+        let mut vec = Vec::with_capacity(config.packet_count);
+        let mut loss_vec: Vec<u64> = Vec::new();
+
+        let mut rng = rand::rng();
+        let uniform = Uniform::new_inclusive(0.0, 1.0).unwrap();
+
+        for i in 0..config.packet_count as u64 {
+            // With probability p, remove packet and add to lost packets
+            if uniform.sample(&mut rng) < self.p {
+                loss_vec.push(i);
+            } else {
+                vec.push(i);
+            }
+        }
+
+        vec.append(&mut loss_vec);
+        vec
+    }
+
+    fn name(&self) -> &str {
+        "RandomLoss"
+    }
+}
 
 /// Generate packets where "bursts" are jittered.
 /// Pick large min_chunk and max_chunk sizes to stress test the data structure.
@@ -263,10 +301,11 @@ impl GeneratorRegistry {
 }
 
 impl Default for GeneratorRegistry {
-    fn default() -> Self { //TODO
+    fn default() -> Self { // Add your generators here
         let mut registry = Self::new();
         registry.register(InOrderGenerator::new());
         registry.register(FirstToLastGenerator::new());
+        registry.register(RandomLossGenerator::new(ERROR_PROBABILITY));
         registry.register(BurstsGenerator::new(5, 10, DEVIATION));
         registry.register(JitterGenerator::new(DEVIATION));
 
