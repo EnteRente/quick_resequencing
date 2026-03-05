@@ -34,7 +34,7 @@ impl RecvBuffer for RecvBuf {
     }
 
     fn drain(&mut self) -> bool {
-        !self.emit_void().is_err()
+        self.emit_void().is_err()
     }
 
     fn name() -> &'static str { "quiche" }
@@ -46,7 +46,7 @@ impl RecvBuffer for QuicGoFrameSorter {
         QuicGoFrameSorter::new()
     }
     fn insert(&mut self, offset: u64, data: &[u8]) -> Result<(), ()> {
-        self.push(offset, quicgo_sorter::bytes::Bytes::from(data.to_vec())).map_err(|_| ())
+        self.push(offset, quicgo_sorter::bytes::Bytes::from(Vec::default())).map_err(|_| ())
     }
 
     fn is_ready(&self) -> bool {
