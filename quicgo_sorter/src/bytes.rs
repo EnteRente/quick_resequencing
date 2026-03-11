@@ -57,7 +57,9 @@ impl Bytes {
         self.len == 0
     }
 
-
+    /// Added functionality to Bytes for allocation-free benchmarking
+    pub fn set_len(&mut self, new_len: usize) { self.len = new_len; }
+    
     pub(crate) fn len(&self) -> usize {
         self.len
     }

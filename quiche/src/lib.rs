@@ -169,7 +169,7 @@ impl RecvBuf {
             // `self.off` have already been received so we should not buffer
             // them again. This is also important to make sure `ready()` doesn't
             // get stuck when a buffer with lower offset than the stream's is
-            // buffered.
+            // buffered.d
             if self.off_front() > buf.off() {
                 buf = buf.split_off((self.off_front() - buf.off()) as usize);
             }

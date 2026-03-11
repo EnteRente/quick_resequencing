@@ -160,6 +160,9 @@ where
         self.off() + self.len() as u64
     }
 
+    /// Setting length for allocation-free benchmarks
+    pub fn set_len(&mut self, new_len: usize) { self.len = new_len; }
+    
     /// Returns the length of `self`.
     pub fn len(&self) -> usize {
         self.len - (self.pos - self.start)

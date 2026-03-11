@@ -1,4 +1,8 @@
-// Port of Linux TCP receive-side reordering/resequencing logic:
+
+mod tcp_input;
+pub use tcp_input::{TcpOfoQueue, SkBuffNode};
+
+/*// Port of Linux TCP receive-side reordering/resequencing logic:
 // https://elixir.bootlin.com/linux/v6.18.6/source/net/ipv4/tcp_input.c
 //
 // Main paths mirrored here:
@@ -9,6 +13,7 @@ use intrusive_collections::Bound::{Excluded, Included};
 use intrusive_collections::{KeyAdapter, RBTree, RBTreeLink, intrusive_adapter};
 use std::collections::VecDeque; // Simulate the receive queue.
 use std::fmt;
+
 
 /// Minimal skb model for resequencing behavior.
 pub struct SkBuffNode {
@@ -53,7 +58,7 @@ impl<'a> KeyAdapter<'a> for SkBuffAdapter {
 
 /// Linux-like receive state for OFO/resequencing.
 pub struct TcpOfoQueue {
-    receive_queue: VecDeque<Box<SkBuffNode>>,
+    receive_queue: VecDeque<Box<SkBuffNode>>, //TODO: Remove, it is unnecessary for the benchmark.
     out_of_order_queue: RBTree<SkBuffAdapter>,
     /// Cached right-most OFO skb key (Linux: tp->ooo_last_skb).
     ooo_last_seq: Option<u32>,
@@ -380,4 +385,4 @@ fn before(seq1: u32, seq2: u32) -> bool {
 #[inline]
 fn after(seq1: u32, seq2: u32) -> bool {
     before(seq2, seq1)
-}
+}*/

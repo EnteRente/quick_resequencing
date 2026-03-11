@@ -14,6 +14,7 @@ pub struct Packet {
 impl Packet {
     pub fn new(offset: u64, length: usize) -> Self { Self { offset, length } }
 
+    pub fn get_length(&self) -> u64 { self.length as u64 }
     pub fn end_offset(&self) -> u64 { self.offset + self.length as u64 }
     pub fn get_offset(&self) -> u64 { self.offset }
     //pub fn get_payload(&self) -> &[u8] { &self.payload }

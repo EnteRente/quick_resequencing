@@ -283,3 +283,118 @@ impl QuicGoFrameSorter {
         unsafe { self.gaps.insert_after(gap, value) }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::bytes::Bytes;
+    use super::QuicGoFrameSorter;
+
+    fn bytes(data: &[u8]) -> Bytes {
+        Bytes::from(data.to_vec())
+    }
+
+    fn assert_gap_ranges<const N: usize>(
+        sorter: &QuicGoFrameSorter,
+        expected: [(u64, u64); N],
+    ) {
+        assert!(
+            sorter
+                .gaps
+                .iter()
+                .map(|(_, gap)| (*gap.start(), *gap.end()))
+                .eq(expected)
+        );
+    }
+
+    #[test]
+    fn in_order_push_updates_gap_and_allows_pop() {
+        let mut sorter = QuicGoFrameSorter::new();
+
+        sorter.push(0, bytes(b"abc")).unwrap();
+
+        assert!(sorter.ready());
+        assert_gap_ranges(&sorter, [(3, u64::MAX)]);
+
+        let out = sorter.pop(10).unwrap();
+        assert_eq!(&*out, b"abc");
+        assert_eq!(sorter.read_pos(), 3);
+        assert!(!sorter.ready());
+    }
+
+    #[test]
+    fn out_of_order_then_gap_fill_restores_contiguous_reads() {
+        let mut sorter = QuicGoFrameSorter::new();
+
+        sorter.push(5, bytes(b"567")).unwrap();
+        assert!(!sorter.ready());
+        assert_gap_ranges(&sorter, [(0, 5), (8, u64::MAX)]);
+
+        sorter.push(0, bytes(b"01234")).unwrap();
+        assert!(sorter.ready());
+        assert_gap_ranges(&sorter, [(8, u64::MAX)]);
+
+        let first = sorter.pop(16).unwrap();
+        assert_eq!(&*first, b"01234");
+        assert!(sorter.ready());
+
+        let second = sorter.pop(16).unwrap();
+        assert_eq!(&*second, b"567");
+        assert!(!sorter.ready());
+        assert_eq!(sorter.read_pos(), 8);
+    }
+
+    #[test]
+    fn duplicate_overlap_does_not_change_existing_data_or_gaps() {
+        let mut sorter = QuicGoFrameSorter::new();
+
+        sorter.push(0, bytes(b"abcdef")).unwrap();
+        sorter.push(2, bytes(b"cd")).unwrap();
+
+        assert_eq!(sorter.queue.len(), 1);
+        assert!(sorter.queue.contains_key(&0));
+        assert_gap_ranges(&sorter, [(6, u64::MAX)]);
+
+        let out = sorter.pop(16).unwrap();
+        assert_eq!(&*out, b"abcdef");
+    }
+
+    #[test]
+    fn spanning_frame_replaces_shorter_entries_and_collapses_gaps() {
+        let mut sorter = QuicGoFrameSorter::new();
+
+        sorter.push(4, bytes(b"aa")).unwrap();
+        sorter.push(8, bytes(b"bb")).unwrap();
+        assert_gap_ranges(&sorter, [(0, 4), (6, 8), (10, u64::MAX)]);
+
+        sorter.push(2, bytes(b"0123456789")).unwrap();
+
+        assert_eq!(sorter.queue.len(), 1);
+        assert!(sorter.queue.contains_key(&2));
+        assert_gap_ranges(&sorter, [(0, 2), (12, u64::MAX)]);
+
+        sorter.push(0, bytes(b"xy")).unwrap();
+        assert!(sorter.ready());
+
+        let first = sorter.pop(16).unwrap();
+        assert_eq!(&*first, b"xy");
+        let second = sorter.pop(16).unwrap();
+        assert_eq!(&*second, b"0123456789");
+        assert_eq!(sorter.read_pos(), 12);
+    }
+
+    #[test]
+    fn partial_pop_requeues_remaining_bytes_at_new_offset() {
+        let mut sorter = QuicGoFrameSorter::new();
+
+        sorter.push(0, bytes(b"abcdefghij")).unwrap();
+
+        let first = sorter.pop(4).unwrap();
+        assert_eq!(&*first, b"abcd");
+        assert!(sorter.ready());
+        assert!(sorter.queue.contains_key(&4));
+
+        let second = sorter.pop(16).unwrap();
+        assert_eq!(&*second, b"efghij");
+        assert!(!sorter.ready());
+    }
+}
