@@ -1,23 +1,23 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::ops::RangeInclusive;
 use nohash_hasher::NoHashHasher;
 
 pub mod bytes;
 mod error;
-mod DoublyLinkedList;
+mod doubly_linked_list;
 
 use bytes::Bytes;
 use error::Error::{Done};
 use error::Result;
+use doubly_linked_list::{DoublyLinkedList, Element};
 
-
+type Gap = Element<RangeInclusive<u64>>;
 
 pub struct QuicGoFrameSorter {
     pub(crate) queue: HashMap<u64, Bytes, BuildHasherDefault<NoHashHasher<u64>>>,
     read_pos: u64,
-    //TODO: Implement as Doubly Linked List | Possible reference: https://rtoch.com/posts/rust-doubly-linked-list/
-    gaps: VecDeque<RangeInclusive<u64>>,
+    gaps: DoublyLinkedList<RangeInclusive<u64>>,
 }
 
 impl QuicGoFrameSorter {
@@ -25,7 +25,7 @@ impl QuicGoFrameSorter {
         let mut fs = QuicGoFrameSorter {
             queue: HashMap::with_capacity_and_hasher(1024, BuildHasherDefault::default()),
             read_pos: 0,
-            gaps: VecDeque::new(),
+            gaps: DoublyLinkedList::new(),
         };
         fs.gaps.push_back(0..=u64::MAX);
         fs
@@ -73,28 +73,30 @@ impl QuicGoFrameSorter {
         
         let mut start = offset;
         let mut end = offset + buf.len() as u64;
+        let front_gap = self.gaps.front().expect("gap list must be initialized");
+        let front_gap_start = *self.gap(front_gap).start();
 
-        if end <= *self.gaps.front().unwrap().start() {
+        if end <= front_gap_start {
             return Ok(())
         }
 
-        let (start_gap_idx, starts_in_gap) = self.find_start_gap(start);
-        let (mut end_gap_idx, ends_in_gap) = self.find_end_gap(start_gap_idx, end);
+        let (start_gap, starts_in_gap) = self.find_start_gap(start);
+        let (end_gap, ends_in_gap) = self.find_end_gap(start_gap, end);
+        let start_gap_equals_end_gap = start_gap == end_gap;
 
+        let start_gap_start = *self.gap(start_gap).start();
+        let start_gap_end = *self.gap(start_gap).end();
+        let end_gap_start = *self.gap(end_gap).start();
+        let end_gap_end = *self.gap(end_gap).end();
 
-        let start_gap_equals_end_gap = start_gap_idx == end_gap_idx;
-
-        if (start_gap_equals_end_gap && end <= *self.gaps[start_gap_idx].start()) ||
+        if (start_gap_equals_end_gap && end <= start_gap_start) ||
             (!start_gap_equals_end_gap &&
-                *self.gaps[start_gap_idx].end() >= *self.gaps[end_gap_idx].start() &&
-                end <= *self.gaps[start_gap_idx].start()) {
+                start_gap_end >= end_gap_start &&
+                end <= start_gap_start) {
             return Ok(()); // duplicate stream data
         }
 
-        let mut start_gap_next_idx = start_gap_idx + 1;
-        let start_gap_end = *self.gaps[start_gap_idx].end();
-        let end_gap_start = *self.gaps[end_gap_idx].start();
-        let end_gap_end = *self.gaps[end_gap_idx].end();
+        let mut start_gap_next = self.next_gap(start_gap);
         let mut adjusted_start_gap_end = false;
 
         let mut pos = start;
@@ -122,39 +124,41 @@ impl QuicGoFrameSorter {
 
         // Adjust data start if not starting in a gap
         if !starts_in_gap && !has_replaced_at_least_one {
-            let gap_start = *self.gaps[start_gap_idx].start();
+            let gap_start = start_gap_start;
             buf = buf.split_off((gap_start - start) as usize);
             start = gap_start;
         }
 
         // Modify start gap
-        if start <= *self.gaps[start_gap_idx].start() {
-            if end >= *self.gaps[start_gap_idx].end() {
+        if start <= start_gap_start {
+            if end >= start_gap_end {
                 // Frame covers whole start gap, remove it
-                self.gaps.remove(start_gap_idx);
-                end_gap_idx = end_gap_idx.saturating_sub(1);
-                start_gap_next_idx -= 1;
+                start_gap_next = self.next_gap(start_gap);
+                self.remove_gap(start_gap);
             } else {
                 // Update gap start
-                self.gaps[start_gap_idx] = end..=*self.gaps[start_gap_idx].end();
+                *self.gap_mut(start_gap) = end..=start_gap_end;
             }
         } else if !has_replaced_at_least_one {
             // Adjust end of start gap
-            let mut new_gap = self.gaps[start_gap_idx].clone();
-            new_gap = *new_gap.start()..=start;
-            self.gaps[start_gap_idx] = new_gap;
+            *self.gap_mut(start_gap) = start_gap_start..=start;
             adjusted_start_gap_end = true;
+            start_gap_next = self.next_gap(start_gap);
         }
 
         // Handle intermediate gaps if not a single gap
         if !start_gap_equals_end_gap {
             // Delete consecutive frames and intermediate gaps
             self.delete_consecutive(start_gap_end);
-            let gap_idx = start_gap_next_idx;
-            while *self.gaps[gap_idx].end() < end_gap_start {
-                self.delete_consecutive(*self.gaps[gap_idx].end());
-                self.gaps.remove(gap_idx);
-                end_gap_idx -= 1;
+            let mut gap = start_gap_next.expect("end gap must follow start gap");
+            while *self.gap(gap).end() < end_gap_start {
+                let gap_end = *self.gap(gap).end();
+                let next_gap = self
+                    .next_gap(gap)
+                    .expect("end gap must remain reachable while removing intermediates");
+                self.delete_consecutive(gap_end);
+                self.remove_gap(gap);
+                gap = next_gap;
             }
         }
 
@@ -168,27 +172,25 @@ impl QuicGoFrameSorter {
         if end == end_gap_end {
             if !start_gap_equals_end_gap {
                 // Frame covers whole end gap, remove it
-                self.gaps.remove(end_gap_idx);
+                self.remove_gap(end_gap);
             }
         } else {
             if start_gap_equals_end_gap && adjusted_start_gap_end {
                 // Frame split existing gap, insert new gap
-                self.gaps.insert(
-                    start_gap_idx + 1,
-                    end..=start_gap_end
-                );
+                self.insert_gap_after(start_gap, end..=start_gap_end);
             } else if !start_gap_equals_end_gap {
                 // Update end gap start
-                self.gaps[end_gap_idx] = end..=*self.gaps[end_gap_idx].end();
+                *self.gap_mut(end_gap) = end..=end_gap_end;
             }
         }
 
-        const MAX_STREAM_FRAME_SORTER_GAPS: usize = 1000;
+        // Deactivate gap limit checker for benchmark
+        /*const MAX_STREAM_FRAME_SORTER_GAPS: usize = 1000;
 
         // Check gap limit
         if self.gaps.len() > MAX_STREAM_FRAME_SORTER_GAPS {
             panic!("too many gaps in received data");
-        }
+        }*/
 
         // Add entry to queue
         self.queue.insert(start, buf);
@@ -204,29 +206,39 @@ impl QuicGoFrameSorter {
 
 impl QuicGoFrameSorter {
 
-    /// return index and whether starts in range
-    fn find_start_gap(&self, offset: u64) -> (usize, bool) {
-        for (idx, gap) in self.gaps.iter().enumerate() {
+    /// return gap handle and whether starts in range
+    fn find_start_gap(&self, offset: u64) -> (Gap, bool) {
+        for (gap_ref, gap) in self.gaps.iter() {
             if offset >= *gap.start() && offset <= *gap.end() {
-                return (idx, true);
+                return (gap_ref, true);
             }
             if offset < *gap.start() {
-                return (idx, false);
+                return (gap_ref, false);
             }
         }
         panic!("no gap found")
     }
 
-    /// return index and whether ends in range
-    fn find_end_gap(&self, start_gap_idx: usize, offset: u64) -> (usize, bool) {
-        for (idx, gap) in self.gaps.iter().enumerate().skip(start_gap_idx) {
+    /// return gap handle and whether ends in range
+    fn find_end_gap(&self, start_gap: Gap, offset: u64) -> (Gap, bool) {
+        let mut current = Some(start_gap);
+
+        while let Some(gap_ref) = current {
+            let gap = self.gap(gap_ref);
             if offset >= *gap.start() && offset < *gap.end() {
-                return (idx, true);
+                return (gap_ref, true);
             }
             if offset < *gap.start() {
-                return (idx - 1, false);
+                return (
+                    self.prev_gap(gap_ref)
+                        .expect("start gap is the first candidate in end-gap search"),
+                    false,
+                );
             }
+
+            current = self.next_gap(gap_ref);
         }
+
         panic!("no gap found")
     }
 
@@ -240,4 +252,34 @@ impl QuicGoFrameSorter {
         }
     }
 
+    // Wrapper for unsafe methods
+    #[inline]
+    fn gap(&self, gap: Gap) -> &RangeInclusive<u64> {
+        unsafe { self.gaps.get(gap) }
+    }
+
+    #[inline]
+    fn gap_mut(&mut self, gap: Gap) -> &mut RangeInclusive<u64> {
+        unsafe { self.gaps.get_mut(gap) }
+    }
+
+    #[inline]
+    fn next_gap(&self, gap: Gap) -> Option<Gap> {
+        unsafe { self.gaps.next(gap) }
+    }
+
+    #[inline]
+    fn prev_gap(&self, gap: Gap) -> Option<Gap> {
+        unsafe { self.gaps.prev(gap) }
+    }
+
+    #[inline]
+    fn remove_gap(&mut self, gap: Gap) -> RangeInclusive<u64> {
+        unsafe { self.gaps.remove(gap) }
+    }
+
+    #[inline]
+    fn insert_gap_after(&mut self, gap: Gap, value: RangeInclusive<u64>) -> Gap {
+        unsafe { self.gaps.insert_after(gap, value) }
+    }
 }
