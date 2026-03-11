@@ -24,7 +24,7 @@ impl RecvBuffer for RecvBuf {
         RecvBuf::new(u64::MAX, u64::MAX)
     }
     fn insert(&mut self, offset: u64, data: &[u8]) -> Result<(), ()> {
-        let range_buf = RangeBuf::from(&data.to_vec(), offset, false);
+        let range_buf = RangeBuf::from(&Vec::default(), offset, false);
         self.write(range_buf).map_err(|_| ())
 
     }
@@ -67,7 +67,7 @@ impl RecvBuffer for TcpOfoQueue {
     }
     fn insert(&mut self, offset: u64, data: &[u8]) -> Result<(), ()> {
         // offset will be u32 in the input
-        let res = self.insert(offset as u32, data.to_vec(), false);
+        let res = self.insert(offset as u32, Vec::default(), false);
         if res { Ok(()) } else { Err(()) }
     }
     fn is_ready(&self) -> bool {
