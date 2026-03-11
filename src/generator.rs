@@ -2,21 +2,21 @@ use rand::Rng;
 use rand_distr::{Uniform, Normal, Distribution};
 
 const DEVIATION: f64 = 2.0;
-const ERROR_PROBABILITY: f64 = 0.2;
+const ERROR_PROBABILITY: f64 = 0.01; // 1% chance of packet loss
 
 #[derive(Debug, Clone)]
 pub struct Packet {
     pub offset: u64,
     pub length: usize,
-    pub payload: Vec<u8>,
+    //pub payload: Vec<u8>,
 }
 
 impl Packet {
-    pub fn new(offset: u64, length: usize, payload: Vec<u8>) -> Self { Self { offset, length, payload } }
+    pub fn new(offset: u64, length: usize) -> Self { Self { offset, length } }
 
     pub fn end_offset(&self) -> u64 { self.offset + self.length as u64 }
     pub fn get_offset(&self) -> u64 { self.offset }
-    pub fn get_payload(&self) -> &[u8] { &self.payload }
+    //pub fn get_payload(&self) -> &[u8] { &self.payload }
 }
 
 
@@ -34,9 +34,9 @@ impl BenchmarkData {
             .into_iter()
             .map(|i| {
                 let offset = i * packet_size as u64;
-                let payload = vec![0; packet_size];
+                //let payload = vec![0; packet_size];
 
-                Packet::new(offset, packet_size, payload)
+                Packet::new(offset, packet_size)
             })
             .collect();
 
@@ -44,7 +44,7 @@ impl BenchmarkData {
     }
 
     /// Create the benchmark sequence from packets
-    pub fn from_packet(packets: Vec<Packet>, length: usize) -> Self {
+    pub fn from_packet(packets: Vec<Packet>) -> Self {
         Self { packets }
     }
     pub fn get_packets(&self) -> &[Packet] { &self.packets }
@@ -304,10 +304,10 @@ impl Default for GeneratorRegistry {
     fn default() -> Self { // Add your generators here
         let mut registry = Self::new();
         registry.register(InOrderGenerator::new());
-        registry.register(FirstToLastGenerator::new());
+        //registry.register(FirstToLastGenerator::new());
         registry.register(RandomLossGenerator::new(ERROR_PROBABILITY));
-        registry.register(BurstsGenerator::new(5, 10, DEVIATION));
-        registry.register(JitterGenerator::new(DEVIATION));
+        //registry.register(BurstsGenerator::new(5, 10, DEVIATION));
+        //registry.register(JitterGenerator::new(DEVIATION));
 
         registry
     }

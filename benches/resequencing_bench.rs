@@ -1,4 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion, Throughput, BenchmarkId, PlottingBackend};
+use std::time::Duration;
 use std::hint::black_box;
 
 use quick_resequencing::RecvBuffer;
@@ -57,11 +58,11 @@ fn bench_config(
 fn bench_recv_buf<T: RecvBuffer>(recv_buf: &mut T, bench_data: &BenchmarkData) {
 
     for packet in bench_data.get_packets() {
-        let payload = packet.get_payload();
+        //let payload = packet.get_payload();
         let offset = packet.get_offset();
 
         // Try inserting data into the buffer
-        let _ = recv_buf.insert(offset, payload);
+        let _ = recv_buf.insert(offset);
 
         // Drain all drainable data
         while recv_buf.is_ready() {
@@ -74,7 +75,7 @@ fn bench_recv_buf<T: RecvBuffer>(recv_buf: &mut T, bench_data: &BenchmarkData) {
     black_box(recv_buf);
 }
 
-
+// TODO: configure Criterion such that: we have JSON files, and the sampling phase works properly (i.e. enough time)
 /// For each implementation run each order type -> repeat for every packet count
 fn bench_main(c: &mut Criterion) {
     // Initial setup of the benchmark
@@ -85,6 +86,7 @@ fn bench_main(c: &mut Criterion) {
         // Configure settings
         let config = GeneratorConfig::new(PACKET_SIZE, packet_count, Some(SEED));
         group.throughput(Throughput::Bytes(config.total_bytes()));
+        group.measurement_time(Duration::from_secs_f64(10.0));
 
         for generator in generator_register.iter() {
             // Generate data
