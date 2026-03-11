@@ -59,10 +59,11 @@ fn bench_recv_buf<T: RecvBuffer>(recv_buf: &mut T, bench_data: &BenchmarkData) {
 
     for packet in bench_data.get_packets() {
         //let payload = packet.get_payload();
+        let length = packet.get_length();
         let offset = packet.get_offset();
 
         // Try inserting data into the buffer
-        let _ = recv_buf.insert(offset);
+        let _ = recv_buf.insert(offset, length);
 
         // Drain all drainable data
         while recv_buf.is_ready() {
