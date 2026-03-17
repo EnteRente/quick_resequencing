@@ -10,8 +10,8 @@ use quicgo_sorter::QuicGoFrameSorter;
 use linux_tcp_sorter::TcpOfoQueue;
 
 
-const PACKET_SIZE: usize = 1200; // Assumption
-const NUM_OF_PACKETS: [usize; 5] = [100, 1_000, 10_000, 100_000, 1_000_000];
+const PACKET_SIZE: usize = 1200; // Assumption for both TCP and QUIC
+const NUM_OF_PACKETS: [usize; 4] = [100, 1_000, 10_000, 100_000];
 
 // For repeatable benchmarks (not in use yet)
 const SEED: u64 = 1;
@@ -42,13 +42,13 @@ fn bench_config(
 
     let bench_id = format!("{}/{}", generator_name, num_of_packets);
 
-    bench_implementations!( // Add Implementations to be benched in here
+    bench_implementations!(
         group,
         bench_id,
         benchmark_data,
         RecvBuf,
         QuicGoFrameSorter,
-        TcpOfoQueue,
+        TcpOfoQueue, // Add Implementations to be benched in here
     );
 }
 
@@ -76,8 +76,9 @@ fn bench_recv_buf<T: RecvBuffer>(recv_buf: &mut T, bench_data: &BenchmarkData) {
     black_box(recv_buf);
 }
 
-// TODO: configure Criterion such that: we have JSON files, and the sampling phase works properly (i.e. enough time)
-/// For each implementation run each order type -> repeat for every packet count
+/// For each implementation run each order type (configured by the generator).
+///
+/// Repeat this for each packet configuration (i.e. 100, 1_000, 100_000).
 fn bench_main(c: &mut Criterion) {
     // Initial setup of the benchmark
     let mut group = c.benchmark_group("Comparison of Resequencing Data Structures");
@@ -86,11 +87,10 @@ fn bench_main(c: &mut Criterion) {
     for packet_count in NUM_OF_PACKETS {
         // Configure settings
         let config = GeneratorConfig::new(PACKET_SIZE, packet_count, Some(SEED));
-        group.throughput(Throughput::Bytes(config.total_bytes()));
-        group.measurement_time(Duration::from_secs_f64(10.0));
+        group.throughput(Throughput::Elements(packet_count as u64));
+        group.measurement_time(Duration::from_secs_f64(42.0));
 
         for generator in generator_register.iter() {
-            // Generate data
             let benchmark_data = generator.generate_packets(&config);
 
             bench_config(
