@@ -23,7 +23,7 @@ pub struct QuicGoFrameSorter {
 impl QuicGoFrameSorter {
     pub fn new() -> Self {
         let mut fs = QuicGoFrameSorter {
-            queue: HashMap::with_capacity_and_hasher(1024, BuildHasherDefault::default()),
+            queue: HashMap::with_capacity_and_hasher(1024, BuildHasherDefault::default()), //TODO: why 1024?
             read_pos: 0,
             gaps: DoublyLinkedList::new(),
         };

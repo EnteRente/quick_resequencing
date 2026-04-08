@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+/// This implementation does not include a pool like the reference implementation in quic-go
+
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;

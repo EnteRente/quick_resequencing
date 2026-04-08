@@ -1,8 +1,11 @@
-use rand::Rng;
+use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
 use rand_distr::{Uniform, Normal, Distribution};
 
 const DEVIATION: f64 = 2.0;
 const ERROR_PROBABILITY: f64 = 0.01; // 1% chance of packet loss
+
+// Run all of them for only one burst case (i.e. 10_000 packets): 0%, 1%, 2%, ..., 10%
+const ERROR_RATES : [f64; 11] = [0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1];
 
 #[derive(Debug, Clone)]
 pub struct Packet {
@@ -43,6 +46,22 @@ impl BenchmarkData {
 
         Self { packets }
     }
+
+    /// Produce packet_order from the benchmark data (reverse of from_order)
+    ///
+    /// Helper for confirming sorting behavior of implementations
+    pub fn to_order(self) -> Vec<u64> {
+        let order = self.packets
+            .into_iter()
+            .map(|packet| {
+                let offset = packet.get_offset();
+                let length = packet.get_length();
+                offset / length as u64
+            }).collect::<Vec<u64>>();
+
+        order
+    }
+
 
     /// Create the benchmark sequence from packets
     pub fn from_packet(packets: Vec<Packet>) -> Self {
@@ -97,7 +116,7 @@ impl InOrderGenerator {
 
 impl OrderGenerator for InOrderGenerator {
     fn generate(&self, config: &GeneratorConfig) -> Vec<u64> {
-        (0..config.packet_size as u64).collect()
+        (0..config.packet_count as u64).collect()
     }
 
     fn name(&self) -> &str { "InOrder" }
@@ -114,8 +133,8 @@ impl FirstToLastGenerator {
 
 impl OrderGenerator for FirstToLastGenerator {
     fn generate(&self, config: &GeneratorConfig) -> Vec<u64> {
-        let mut vec: Vec<u64> = (2..config.packet_count as u64).collect();
-        vec.push(1);
+        let mut vec: Vec<u64> = (1..config.packet_count as u64).collect();
+        vec.push(0);
 
         vec
     }
@@ -139,12 +158,20 @@ impl OrderGenerator for RandomLossGenerator {
         let mut vec = Vec::with_capacity(config.packet_count);
         let mut loss_vec: Vec<u64> = Vec::new();
 
-        let mut rng = rand::rng();
+        let mut seeded_rng;
+        let mut thread_rng;
+        let rng: &mut dyn RngCore = if let Some(seed) = config.seed {
+            seeded_rng = StdRng::seed_from_u64(seed);
+            &mut seeded_rng
+        } else {
+            thread_rng = rand::rng();
+            &mut thread_rng
+        };
         let uniform = Uniform::new_inclusive(0.0, 1.0).unwrap();
 
         for i in 0..config.packet_count as u64 {
             // With probability p, remove packet and add to lost packets
-            if uniform.sample(&mut rng) < self.p {
+            if uniform.sample(rng) < self.p {
                 loss_vec.push(i);
             } else {
                 vec.push(i);
@@ -305,10 +332,12 @@ impl Default for GeneratorRegistry {
     fn default() -> Self { // Add your generators here
         let mut registry = Self::new();
         registry.register(InOrderGenerator::new());
-        //registry.register(FirstToLastGenerator::new());
-        registry.register(RandomLossGenerator::new(ERROR_PROBABILITY));
-        //registry.register(BurstsGenerator::new(5, 10, DEVIATION));
-        //registry.register(JitterGenerator::new(DEVIATION));
+        registry.register(FirstToLastGenerator::new());
+        //registry.register(RandomLossGenerator::new(ERROR_PROBABILITY));
+
+        for &error_rate in ERROR_RATES.iter() {
+            registry.register(RandomLossGenerator::new(error_rate));
+        }
 
         registry
     }
