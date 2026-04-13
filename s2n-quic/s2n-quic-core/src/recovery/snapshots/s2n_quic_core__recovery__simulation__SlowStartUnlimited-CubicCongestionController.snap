@@ -1,0 +1,23 @@
+---
+source: quic/s2n-quic-core/src/recovery/simulation.rs
+expression: self
+---
+Simulation {
+    name: "Slow Start Unlimited",
+    description: "Full congestion window utilization with no congestion experienced",
+    cc: "CubicCongestionController",
+    rounds: [
+          0: pkts: 10,
+          1: pkts: 20,
+          2: pkts: 40,
+          3: pkts: 80,
+          4: pkts: 160,
+          5: pkts: 320,
+          6: pkts: 640,
+          7: pkts: 1280,
+          8: pkts: 2560,
+          9: pkts: 5120,
+         10: pkts: 10240,
+         11: pkts: 20480,
+    ],
+}

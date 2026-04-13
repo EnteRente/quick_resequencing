@@ -1,0 +1,13 @@
+---
+source: quic/s2n-quic-core/src/frame/mod.rs
+expression: values
+---
+[
+    DataBlocked(
+        DataBlocked {
+            data_limit: VarInt(
+                1,
+            ),
+        },
+    ),
+]

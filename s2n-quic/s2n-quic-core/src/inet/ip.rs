@@ -1,0 +1,460 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+use crate::inet::{
+    ipv4::{IpV4Address, SocketAddressV4},
+    ipv6::{IpV6Address, SocketAddressV6},
+    unspecified::Unspecified,
+};
+use core::{fmt, net};
+
+#[cfg(any(test, feature = "generator"))]
+use bolero_generator::prelude::*;
+
+/// An IP address, either IPv4 or IPv6.
+///
+/// Instead of using `std::net::IPAddr`, this implementation
+/// is geared towards zerocopy decoding.
+///
+/// The size is also consistent across target operating systems.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(any(test, feature = "generator"), derive(TypeGenerator))]
+pub enum IpAddress {
+    Ipv4(IpV4Address),
+    Ipv6(IpV6Address),
+}
+
+impl IpAddress {
+    /// Converts the IP address into IPv4 if it is mapped, otherwise the address is unchanged
+    #[inline]
+    #[must_use]
+    pub fn unmap(self) -> Self {
+        match self {
+            Self::Ipv4(_) => self,
+            Self::Ipv6(addr) => addr.unmap(),
+        }
+    }
+
+    /// Returns `true` if the two addresses are equal from a network perspective.
+    ///
+    /// This will unmap IPv4-mapped addresses to IpV4 tagged enum values
+    #[inline]
+    pub fn unmapped_eq(&self, other: &Self) -> bool {
+        self.unmap() == other.unmap()
+    }
+
+    /// Converts the IP address into IPv6 if it is IPv4, otherwise the address is unchanged
+    #[inline]
+    #[must_use]
+    pub fn to_ipv6_mapped(self) -> IpV6Address {
+        match self {
+            Self::Ipv4(addr) => addr.to_ipv6_mapped(),
+            Self::Ipv6(addr) => addr,
+        }
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn with_port(self, port: u16) -> SocketAddress {
+        match self {
+            Self::Ipv4(addr) => addr.with_port(port).into(),
+            Self::Ipv6(addr) => addr.with_port(port).into(),
+        }
+    }
+}
+
+impl From<IpV4Address> for IpAddress {
+    fn from(ip: IpV4Address) -> Self {
+        Self::Ipv4(ip)
+    }
+}
+
+impl From<IpV6Address> for IpAddress {
+    fn from(ip: IpV6Address) -> Self {
+        Self::Ipv6(ip)
+    }
+}
+
+impl Unspecified for IpAddress {
+    fn is_unspecified(&self) -> bool {
+        match self {
+            Self::Ipv4(addr) => addr.is_unspecified(),
+            Self::Ipv6(addr) => addr.is_unspecified(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum IpAddressRef<'a> {
+    IPv4(&'a IpV4Address),
+    IPv6(&'a IpV6Address),
+}
+
+impl IpAddressRef<'_> {
+    pub fn to_owned(self) -> IpAddress {
+        match self {
+            Self::IPv4(addr) => IpAddress::Ipv4(*addr),
+            Self::IPv6(addr) => IpAddress::Ipv6(*addr),
+        }
+    }
+}
+
+impl<'a> From<&'a IpV4Address> for IpAddressRef<'a> {
+    fn from(ip: &'a IpV4Address) -> Self {
+        Self::IPv4(ip)
+    }
+}
+
+impl<'a> From<&'a IpV6Address> for IpAddressRef<'a> {
+    fn from(ip: &'a IpV6Address) -> Self {
+        Self::IPv6(ip)
+    }
+}
+
+impl From<net::IpAddr> for IpAddress {
+    fn from(addr: net::IpAddr) -> Self {
+        match addr {
+            net::IpAddr::V4(addr) => Self::Ipv4(addr.into()),
+            net::IpAddr::V6(addr) => Self::Ipv6(addr.into()),
+        }
+    }
+}
+
+/// An IP socket address, either IPv4 or IPv6, with a specific port.
+///
+/// Instead of using `std::net::SocketAddr`, this implementation
+/// is geared towards zerocopy decoding.
+///
+/// The size is also consistent across target operating systems.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(any(test, feature = "generator"), derive(TypeGenerator))]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
+pub enum SocketAddress {
+    IpV4(SocketAddressV4),
+    IpV6(SocketAddressV6),
+}
+
+impl SocketAddress {
+    #[inline]
+    pub fn ip(&self) -> IpAddress {
+        match self {
+            SocketAddress::IpV4(addr) => IpAddress::Ipv4(*addr.ip()),
+            SocketAddress::IpV6(addr) => IpAddress::Ipv6(*addr.ip()),
+        }
+    }
+
+    #[inline]
+    pub fn port(&self) -> u16 {
+        match self {
+            SocketAddress::IpV4(addr) => addr.port(),
+            SocketAddress::IpV6(addr) => addr.port(),
+        }
+    }
+
+    #[inline]
+    pub fn set_port(&mut self, port: u16) {
+        match self {
+            SocketAddress::IpV4(addr) => addr.set_port(port),
+            SocketAddress::IpV6(addr) => addr.set_port(port),
+        }
+    }
+
+    #[inline]
+    pub const fn unicast_scope(&self) -> Option<UnicastScope> {
+        match self {
+            Self::IpV4(addr) => addr.unicast_scope(),
+            Self::IpV6(addr) => addr.unicast_scope(),
+        }
+    }
+
+    /// Converts the IP address into a IPv6 mapped address
+    pub fn to_ipv6_mapped(self) -> SocketAddressV6 {
+        match self {
+            Self::IpV4(addr) => addr.to_ipv6_mapped(),
+            Self::IpV6(addr) => addr,
+        }
+    }
+
+    /// Converts the IP address into IPv4 if it is mapped, otherwise the address is unchanged
+    #[inline]
+    #[must_use]
+    pub fn unmap(self) -> Self {
+        match self {
+            Self::IpV4(_) => self,
+            Self::IpV6(addr) => addr.unmap(),
+        }
+    }
+
+    /// Returns `true` if the two addresses are equal from a network perspective.
+    ///
+    /// This will unmap IPv4-mapped addresses to IpV4 tagged enum values
+    #[inline]
+    pub fn unmapped_eq(&self, other: &Self) -> bool {
+        self.unmap() == other.unmap()
+    }
+}
+
+impl Default for SocketAddress {
+    fn default() -> Self {
+        SocketAddress::IpV4(Default::default())
+    }
+}
+
+impl fmt::Display for SocketAddress {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            SocketAddress::IpV4(addr) => write!(fmt, "{addr}"),
+            SocketAddress::IpV6(addr) => write!(fmt, "{addr}"),
+        }
+    }
+}
+
+impl Unspecified for SocketAddress {
+    fn is_unspecified(&self) -> bool {
+        match self {
+            SocketAddress::IpV4(addr) => addr.is_unspecified(),
+            SocketAddress::IpV6(addr) => addr.is_unspecified(),
+        }
+    }
+}
+
+impl From<SocketAddress> for net::SocketAddr {
+    fn from(address: SocketAddress) -> Self {
+        match address {
+            SocketAddress::IpV4(addr) => addr.into(),
+            SocketAddress::IpV6(addr) => addr.into(),
+        }
+    }
+}
+
+impl From<(net::IpAddr, u16)> for SocketAddress {
+    fn from((ip, port): (net::IpAddr, u16)) -> Self {
+        match ip {
+            net::IpAddr::V4(ip) => Self::IpV4((ip, port).into()),
+            net::IpAddr::V6(ip) => Self::IpV6((ip, port).into()),
+        }
+    }
+}
+
+impl<'a> From<SocketAddressRef<'a>> for net::SocketAddr {
+    fn from(address: SocketAddressRef<'a>) -> Self {
+        match address {
+            SocketAddressRef::IpV4(addr) => addr.into(),
+            SocketAddressRef::IpV6(addr) => addr.into(),
+        }
+    }
+}
+
+impl From<net::SocketAddr> for SocketAddress {
+    fn from(addr: net::SocketAddr) -> Self {
+        match addr {
+            net::SocketAddr::V4(addr) => Self::IpV4(addr.into()),
+            net::SocketAddr::V6(addr) => Self::IpV6(addr.into()),
+        }
+    }
+}
+
+impl From<SocketAddressV4> for SocketAddress {
+    fn from(addr: SocketAddressV4) -> Self {
+        SocketAddress::IpV4(addr)
+    }
+}
+
+impl From<SocketAddressV6> for SocketAddress {
+    fn from(addr: SocketAddressV6) -> Self {
+        SocketAddress::IpV6(addr)
+    }
+}
+
+/// An IP socket address, either IPv4 or IPv6, with a specific port.
+///
+/// This is the borrowed version of `SocketAddress`, aimed at zerocopy
+/// use cases.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SocketAddressRef<'a> {
+    IpV4(&'a SocketAddressV4),
+    IpV6(&'a SocketAddressV6),
+}
+
+impl SocketAddressRef<'_> {
+    pub fn to_owned(self) -> SocketAddress {
+        match self {
+            Self::IpV4(addr) => SocketAddress::IpV4(*addr),
+            Self::IpV6(addr) => SocketAddress::IpV6(*addr),
+        }
+    }
+}
+
+//= https://www.rfc-editor.org/rfc/rfc9000#section-21.5.6
+//# Similarly, endpoints could regard a change in address to a link-local
+//# address [RFC4291] or an address in a private-use range [RFC1918] from
+//# a global, unique-local [RFC4193], or non-private address as a
+//# potential attempt at request forgery.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnicastScope {
+    Loopback,
+    LinkLocal,
+    Private,
+    Global,
+}
+
+#[cfg(any(test, feature = "std"))]
+mod std_conversion {
+    use super::*;
+    use std::net;
+
+    impl net::ToSocketAddrs for SocketAddress {
+        type Iter = std::iter::Once<net::SocketAddr>;
+
+        fn to_socket_addrs(&self) -> std::io::Result<Self::Iter> {
+            match self {
+                Self::IpV4(addr) => addr.to_socket_addrs(),
+                Self::IpV6(addr) => addr.to_socket_addrs(),
+            }
+        }
+    }
+
+    impl net::ToSocketAddrs for SocketAddressRef<'_> {
+        type Iter = std::iter::Once<net::SocketAddr>;
+
+        fn to_socket_addrs(&self) -> std::io::Result<Self::Iter> {
+            match self {
+                Self::IpV4(addr) => addr.to_socket_addrs(),
+                Self::IpV6(addr) => addr.to_socket_addrs(),
+            }
+        }
+    }
+}
+
+define_inet_type!(
+    pub struct Protocol {
+        id: u8,
+    }
+);
+
+impl fmt::Debug for Protocol {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_tuple("ip::Protocol")
+            .field(&format_args!("{self}"))
+            .finish()
+    }
+}
+
+impl fmt::Display for Protocol {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Self::HOPOPT => "IPv6 Hop-by-Hop Option",
+            Self::ICMP => "Internet Control Message",
+            Self::IPV4 => "IPv4 Encapsulation",
+            Self::TCP => "Transmission Control",
+            Self::UDP => "User Datagram",
+            Self::IPV6 => "IPv6 Encapsulation",
+            Self::IPV6_ROUTE => "Routing Header for IPv6",
+            Self::IPV6_FRAG => "Fragment Header for IPv6",
+            Self::IPV6_ICMP => "ICMP for IPv6",
+            Self::IPV6_NO_NXT => "No Next Header for IPv6",
+            Self::IPV6_OPTS => "Destination Options for IPv6",
+            Self::UDPLITE => "Lightweight User Datagram",
+            Self { id } => return write!(f, "[unknown 0x{id:02x}]"),
+        }
+        .fmt(f)
+    }
+}
+
+macro_rules! impl_p {
+    ($fun:ident, $cap:ident, $val:literal) => {
+        pub const $cap: Self = Self { id: $val };
+
+        #[inline]
+        pub const fn $fun(self) -> bool {
+            self.id == $val
+        }
+    };
+}
+
+impl Protocol {
+    // https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
+    // NOTE: these variants were added as the ones we think we'll need. feel free to add more as
+    //       needed.
+    impl_p!(is_hop_by_hop, HOPOPT, 0);
+    impl_p!(is_icmp, ICMP, 1);
+    impl_p!(is_ipv4, IPV4, 4);
+    impl_p!(is_tcp, TCP, 6);
+    impl_p!(is_udp, UDP, 17);
+    impl_p!(is_ipv6, IPV6, 41);
+    impl_p!(is_ipv6_route, IPV6_ROUTE, 43);
+    impl_p!(is_ipv6_fragment, IPV6_FRAG, 44);
+    impl_p!(is_ipv6_icmp, IPV6_ICMP, 58);
+    impl_p!(is_ipv6_no_next, IPV6_NO_NXT, 59);
+    impl_p!(is_ipv6_options, IPV6_OPTS, 60);
+    impl_p!(is_udplite, UDPLITE, 136);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{SocketAddr, ToSocketAddrs};
+
+    const TESTS: &[&str] = &[
+        "127.0.0.1:80",
+        "192.168.1.1:40",
+        "255.255.255.255:12345",
+        "[::]:443",
+        "[::1]:123",
+        "[2001:0db8:85a3:0001:0002:8a2e:0370:7334]:9000",
+    ];
+
+    #[test]
+    //= https://www.rfc-editor.org/rfc/rfc5156#section-2.2
+    //= type=test
+    //# ::FFFF:0:0/96 are the IPv4-mapped addresses [RFC4291].
+    fn to_ipv6_mapped_test() {
+        for test in TESTS.iter() {
+            // assert that this implementation matches the standard library
+            let addr: SocketAddr = test.parse().unwrap();
+            let address: SocketAddress = addr.into();
+            let addr = match addr {
+                SocketAddr::V4(addr) => {
+                    let ip = addr.ip().to_ipv6_mapped();
+                    (ip, addr.port()).into()
+                }
+                _ => addr,
+            };
+            let address = address.to_ipv6_mapped().into();
+            assert_eq!(addr, address);
+        }
+    }
+
+    #[test]
+    fn unmap_test() {
+        for test in TESTS.iter() {
+            // assert that unmap correctly converts IPv4 mapped addresses
+            let addr: SocketAddr = test.parse().unwrap();
+            let address: SocketAddress = addr.into();
+            let actual: SocketAddress = address.to_ipv6_mapped().into();
+            let actual = actual.unmap();
+            assert_eq!(address, actual);
+        }
+    }
+
+    #[test]
+    fn display_test() {
+        for test in TESTS.iter() {
+            // assert that this implementation matches the standard library
+            let addr: SocketAddr = test.parse().unwrap();
+            let address: SocketAddress = addr.into();
+            assert_eq!(addr.to_string(), address.to_string());
+        }
+    }
+
+    #[test]
+    fn to_socket_addrs_test() {
+        for test in TESTS.iter() {
+            let addr: SocketAddr = test.parse().unwrap();
+            let address: SocketAddress = addr.into();
+            for address in address.to_socket_addrs().unwrap() {
+                assert_eq!(addr, address);
+            }
+        }
+    }
+}

@@ -1,0 +1,86 @@
+---
+source: quic/s2n-quic-core/src/state/tests.rs
+expression: "Lr::test_transitions()"
+---
+{
+    Init: {
+        on_left: Ok(
+            Left,
+        ),
+        on_right: Ok(
+            Right,
+        ),
+    },
+    Left: {
+        on_left: Ok(
+            LeftLeft,
+        ),
+        on_right: Ok(
+            LeftRight,
+        ),
+    },
+    LeftLeft: {
+        on_left: Err(
+            InvalidTransition {
+                current: LeftLeft,
+                event: "on_left",
+            },
+        ),
+        on_right: Err(
+            InvalidTransition {
+                current: LeftLeft,
+                event: "on_right",
+            },
+        ),
+    },
+    LeftRight: {
+        on_left: Err(
+            InvalidTransition {
+                current: LeftRight,
+                event: "on_left",
+            },
+        ),
+        on_right: Err(
+            InvalidTransition {
+                current: LeftRight,
+                event: "on_right",
+            },
+        ),
+    },
+    Right: {
+        on_left: Ok(
+            RightLeft,
+        ),
+        on_right: Ok(
+            RightRight,
+        ),
+    },
+    RightLeft: {
+        on_left: Err(
+            InvalidTransition {
+                current: RightLeft,
+                event: "on_left",
+            },
+        ),
+        on_right: Err(
+            InvalidTransition {
+                current: RightLeft,
+                event: "on_right",
+            },
+        ),
+    },
+    RightRight: {
+        on_left: Err(
+            InvalidTransition {
+                current: RightRight,
+                event: "on_left",
+            },
+        ),
+        on_right: Err(
+            InvalidTransition {
+                current: RightRight,
+                event: "on_right",
+            },
+        ),
+    },
+}
