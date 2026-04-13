@@ -1,21 +1,29 @@
+use std::any::Any;
 use criterion::{criterion_group, criterion_main, Criterion, Throughput, BenchmarkId, PlottingBackend};
 use std::time::Duration;
 use std::hint::black_box;
 
 use quick_resequencing::RecvBuffer;
-use quick_resequencing::generator::{GeneratorRegistry, BenchmarkData, GeneratorConfig};
+use quick_resequencing::generator::{GeneratorRegistry, BenchmarkData, GeneratorConfig, RandomLossGenerator, OrderGenerator};
 
 use quiche::RecvBuf;
 use quicgo_sorter::QuicGoFrameSorter;
 use linux_tcp_sorter::TcpOfoQueue;
+use lsquic::ReassemblyEngine;
+use s2n_quic::buffer::Reassembler;
 
+// Assumption for both TCP and QUIC
+// The QUIC specification recommends a conservative default minimum QUIC packet size of 1200 bytes
+// (the larger the packet size, the better the performance)
+// https://www.fastly.com/blog/measuring-quic-vs-tcp-computational-efficiency
+// This is only relevant when working with actual data
+const PACKET_SIZE: usize = 1200;
+const NUM_OF_PACKETS: [usize; 6] = [100, 1_000, 10_000, 30_000, 60_000, 100_000];
 
-const PACKET_SIZE: usize = 1200; // Assumption for both TCP and QUIC
-const NUM_OF_PACKETS: [usize; 4] = [100, 1_000, 10_000, 100_000];
+// For reproducibility, use a fixed seed
+const SEED: u64 = 42;
 
-// For repeatable benchmarks (not in use yet)
-const SEED: u64 = 1;
-
+const ERROR_RATES : [f64; 11] = [0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1];
 
 
 /// Macro to reduce boilerplate when benchmarking multiple implementations
@@ -49,6 +57,8 @@ fn bench_config(
         RecvBuf,
         QuicGoFrameSorter,
         TcpOfoQueue, // Add Implementations to be benched in here
+        Reassembler,
+        ReassemblyEngine,
     );
 }
 
@@ -88,7 +98,7 @@ fn bench_main(c: &mut Criterion) {
         // Configure settings
         let config = GeneratorConfig::new(PACKET_SIZE, packet_count, Some(SEED));
         group.throughput(Throughput::Elements(packet_count as u64));
-        group.measurement_time(Duration::from_secs_f64(42.0));
+        group.measurement_time(Duration::from_secs_f64(50.0));
 
         for generator in generator_register.iter() {
             let benchmark_data = generator.generate_packets(&config);
@@ -100,6 +110,22 @@ fn bench_main(c: &mut Criterion) {
                 packet_count,
             );
         }
+    }
+
+    // TODO: "Hard coded" (i.e. not integrated into incorporated into the code structure as intended)
+    // Random Loss 0% up to 10% error rate with 10_000 packets
+    for error_rate in ERROR_RATES {
+        let config = GeneratorConfig::new(PACKET_SIZE, 10_000, Some(SEED));
+        let generator = RandomLossGenerator::new(error_rate);
+        let benchmark_data = generator.generate_packets(&config);
+
+        let loss_label = format!("RandomLoss with {:.0}% loss", error_rate);
+        bench_config(
+            &mut group,
+            &benchmark_data,
+            &loss_label,
+            10_000,
+        )
     }
 
     group.finish();

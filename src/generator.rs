@@ -102,7 +102,7 @@ pub trait OrderGenerator: Send + Sync {
         BenchmarkData::from_order(order, config.packet_size)
     }
     
-    fn name(&self) -> &str;
+    fn name(&self) -> &'static str;
 }
 
 
@@ -119,7 +119,7 @@ impl OrderGenerator for InOrderGenerator {
         (0..config.packet_count as u64).collect()
     }
 
-    fn name(&self) -> &str { "InOrder" }
+    fn name(&self) -> &'static str { "InOrder" }
 }
 
 /// Simulates that the first packet is lost and retransmitted (appended to the end of the vector)
@@ -139,7 +139,7 @@ impl OrderGenerator for FirstToLastGenerator {
         vec
     }
 
-    fn name(&self) -> &str { "FirstToLast" }
+    fn name(&self) -> &'static str { "FirstToLast" }
 }
 
 /// Generate packets with a given probability of being lost.
@@ -182,9 +182,7 @@ impl OrderGenerator for RandomLossGenerator {
         vec
     }
 
-    fn name(&self) -> &str {
-        "RandomLoss"
-    }
+    fn name(&self) -> &'static str { "RandomLoss" }
 }
 
 /// Generate packets where "bursts" are jittered.
@@ -253,7 +251,7 @@ impl OrderGenerator for BurstsGenerator {
         vec
     }
 
-    fn name(&self) -> &str { "Bursts" }
+    fn name(&self) -> &'static str { "Bursts" }
 }
 
 #[derive(Debug, Clone)]
@@ -291,7 +289,7 @@ impl OrderGenerator for JitterGenerator {
 
     }
 
-    fn name(&self) -> &str { "Jitter" }
+    fn name(&self) -> &'static str { "Jitter" }
 }
 
 //TODO: Implement overlapping with `PacketOrderGenerator`
@@ -334,10 +332,6 @@ impl Default for GeneratorRegistry {
         registry.register(InOrderGenerator::new());
         registry.register(FirstToLastGenerator::new());
         //registry.register(RandomLossGenerator::new(ERROR_PROBABILITY));
-
-        for &error_rate in ERROR_RATES.iter() {
-            registry.register(RandomLossGenerator::new(error_rate));
-        }
 
         registry
     }
