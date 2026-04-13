@@ -8,14 +8,19 @@ edition = "2024"
 members = [
     "linux_tcp_sorter",
     "quiche",
-    "quicgo_sorter"
+    "quicgo_sorter",
+    "s2n-quic",
+    "lsquic"
 ]
 
 
 [dependencies]
 linux_tcp_sorter = { path = "linux_tcp_sorter", version = "0.1.0", features = ["bench"] }
 quicgo_sorter    = { path = "quicgo_sorter",    version = "0.1.0", features = ["bench"] }
-quiche          = { path = "quiche",          version = "0.22.0", features = ["bench"] }
+quiche           = { path = "quiche",           version = "0.22.0", features = ["bench"] }
+s2n-quic         = { path = "s2n-quic",         version = "0.77.0", features = ["bench"]}
+lsquic           = { path = "lsquic",           version = "0.1.0", features = ["bench"]}
+
 rand = "0.9.0"
 rand_distr = "0.5.1"
 
