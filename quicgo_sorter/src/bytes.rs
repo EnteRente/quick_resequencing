@@ -41,6 +41,18 @@ impl Bytes {
         EMPTY.into()
     }
 
+    /// Creates a new `Bytes` with only length, without allocating data.
+    /// This is useful for benchmarking where actual payload is not needed.
+    /// The buffer maintains all invariants (length calculations) but has no backing data.
+    pub fn from_len(len: usize) -> Self {
+        const EMPTY: &[u8] = &[];
+        Bytes {
+            ptr: EMPTY.as_ptr(),
+            len,
+            data: Static(EMPTY),
+        }
+    }
+
     #[inline]
     fn as_slice(&self) -> &[u8] {
         unsafe { slice::from_raw_parts(self.ptr, self.len) }
@@ -56,9 +68,6 @@ impl Bytes {
     pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
-
-    /// Added functionality to Bytes for allocation-free benchmarking
-    pub fn set_len(&mut self, new_len: usize) { self.len = new_len; }
     
     pub(crate) fn len(&self) -> usize {
         self.len

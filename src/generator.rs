@@ -1,12 +1,6 @@
 use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
 use rand_distr::{Uniform, Normal, Distribution};
 
-const DEVIATION: f64 = 2.0;
-const ERROR_PROBABILITY: f64 = 0.01; // 1% chance of packet loss
-
-// Run all of them for only one burst case (i.e. 10_000 packets): 0%, 1%, 2%, ..., 10%
-const ERROR_RATES : [f64; 11] = [0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1];
-
 #[derive(Debug, Clone)]
 pub struct Packet {
     pub offset: u64,
