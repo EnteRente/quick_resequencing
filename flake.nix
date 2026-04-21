@@ -3,9 +3,13 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, rust-overlay }:
     let
       systems = [
         "x86_64-linux"
@@ -18,18 +22,29 @@
       devShells = forAllSystems (
         system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [
+              rust-overlay.overlays.default
+            ];
+          };
           python = pkgs.python312.withPackages (
             ps: with ps; [
               matplotlib
             ]
           );
+          rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+            extensions = [
+              "rust-src"
+              "rustfmt"
+              "clippy"
+            ];
+          };
         in {
           default = pkgs.mkShell {
             packages = [
               python
-              pkgs.rustc
-              pkgs.cargo
+              rustToolchain
               pkgs.pkg-config
               pkgs.git
             ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
