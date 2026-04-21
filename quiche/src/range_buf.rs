@@ -145,6 +145,21 @@ where
         }
     }
 
+    /// Creates a new `RangeBuf` with only offset and length, without allocating data.
+    /// This is useful for benchmarking where actual payload is not needed.
+    /// The buffer maintains all invariants (length, offset calculations) but has no backing data.
+    pub fn from_len(off: u64, len: usize, fin: bool) -> RangeBuf<F> {
+        RangeBuf {
+            data: F::buf_from_slice(&[]),
+            start: 0,
+            pos: 0,
+            len,
+            off,
+            fin,
+            _bf: Default::default(),
+        }
+    }
+
     /// Returns whether `self` holds the final offset in the stream.
     pub fn fin(&self) -> bool {
         self.fin
@@ -159,9 +174,6 @@ where
     pub fn max_off(&self) -> u64 {
         self.off() + self.len() as u64
     }
-
-    /// Setting length for allocation-free benchmarks
-    pub fn set_len(&mut self, new_len: usize) { self.len = new_len; }
     
     /// Returns the length of `self`.
     pub fn len(&self) -> usize {
