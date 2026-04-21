@@ -22,3 +22,11 @@ target
 
 # Macos related
 .DS_store
+
+# Local Python environment and generated benchmark artifacts
+.venv/
+benchmark_results/
+
+# Optional local Nix/direnv state
+.direnv/
+result
