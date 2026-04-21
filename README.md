@@ -185,6 +185,7 @@ python3 run_benchmark_pipeline.py --help
 - [x] InOrder
 - [x] FirstToLast
 - [x] RandomLoss from 0% to 10%
+- [ ] RandomPermutation (shuffle packets)
 - [ ] Overlapping packets
 - [ ] ...
 

@@ -21,6 +21,18 @@ FLAKE_FILE_PATH = REPO_ROOT / "flake.nix"
 PLOTTER_FILE_PATH = REPO_ROOT / "box_plotter.py"
 PIPELINE_FILE_PATH = REPO_ROOT / "run_benchmark_pipeline.py"
 NIX_DEV_ENV_VAR = "QUICK_RESEQUENCING_NIX_DEV"
+BENCH_SCHEMES_ENV_VAR = "QUICK_RESEQUENCING_SCHEMES"
+SCHEME_ORDER = ["InOrder", "FirstToLast", "RandomLoss"]
+SCHEME_ALIASES = {
+    "inorder": "InOrder",
+    "in_order": "InOrder",
+    "firsttolast": "FirstToLast",
+    "first_to_last": "FirstToLast",
+    "randomloss": "RandomLoss",
+    "random_loss": "RandomLoss",
+    "randomlossrate": "RandomLoss",
+    "random_loss_rate": "RandomLoss",
+}
 MIN_PYTHON = (3, 9, 0)
 MIN_RUST = (1, 85, 0)
 
@@ -60,6 +72,15 @@ def parse_args() -> argparse.Namespace:
         "--group",
         default="Comparison of Resequencing Data Structures",
         help=f"Criterion benchmark group passed to {PLOTTER_FILE_PATH}.",
+    )
+    parser.add_argument(
+        "--scheme",
+        action="append",
+        default=[],
+        help=(
+            "Only benchmark and plot the given scheme. Repeat this option or use a "
+            "comma-separated list. Supported values: InOrder, FirstToLast, RandomLoss."
+        ),
     )
     parser.add_argument(
         "--perf",
@@ -120,15 +141,20 @@ def run_command(
     *,
     cwd: Path = REPO_ROOT,
     capture_output: bool = False,
+    env: Optional[dict[str, str]] = None,
 ) -> subprocess.CompletedProcess[str]:
     display = " ".join(shlex.quote(os.fspath(part)) for part in command)
     print(f"[run] {display}")
+    command_env = os.environ.copy()
+    if env:
+        command_env.update(env)
     return subprocess.run(
         [os.fspath(part) for part in command],
         cwd=cwd,
         check=True,
         text=True,
         capture_output=capture_output,
+        env=command_env,
     )
 
 
@@ -215,14 +241,46 @@ def verify_perf_support(perf_mode: str) -> None:
         raise RuntimeError("perf was requested, but the 'perf' executable was not found in PATH.")
 
 
+def normalize_selected_schemes(raw_schemes: Sequence[str]) -> list[str]:
+    if not raw_schemes:
+        return []
+
+    selected: list[str] = []
+    for raw_value in raw_schemes:
+        for raw_scheme in raw_value.split(","):
+            scheme = raw_scheme.strip()
+            if not scheme:
+                continue
+
+            key = scheme.replace("-", "_").lower()
+            if key == "all":
+                return []
+
+            canonical = SCHEME_ALIASES.get(key)
+            if canonical is None:
+                allowed = ", ".join(SCHEME_ORDER)
+                raise ValueError(f"Unknown scheme '{scheme}'. Supported values: {allowed}")
+
+            if canonical not in selected:
+                selected.append(canonical)
+
+    return sorted(selected, key=SCHEME_ORDER.index)
+
+
+def benchmark_env(selected_schemes: Sequence[str]) -> dict[str, str]:
+    if not selected_schemes:
+        return {}
+    return {BENCH_SCHEMES_ENV_VAR: ",".join(selected_schemes)}
+
+
 def clean_directory(path: Path) -> None:
     if path.exists():
         shutil.rmtree(path)
     path.mkdir(parents=True, exist_ok=True)
 
 
-def run_benchmark(bench_name: str) -> None:
-    run_command(["cargo", "bench", "--bench", bench_name])
+def run_benchmark(bench_name: str, env: dict[str, str]) -> None:
+    run_command(["cargo", "bench", "--bench", bench_name], env=env)
 
 
 def build_bench_binary(bench_name: str) -> Path:
@@ -274,6 +332,7 @@ def run_perf_stat(
     bench_binary: Path,
     perf_events: str,
     perf_output_dir: Path,
+    env: dict[str, str],
 ) -> dict[str, str]:
     perf_command: list[Union[str, os.PathLike[str]]] = ["perf", "stat"]
     if perf_events:
@@ -281,7 +340,7 @@ def run_perf_stat(
 
     perf_stat_path = perf_output_dir / "perf_stat.txt"
     perf_command.extend(["-d", "-d", "-d", "-o", perf_stat_path, bench_binary])
-    run_command(perf_command)
+    run_command(perf_command, env=env)
     return {"perf_stat_path": str(perf_stat_path)}
 
 
@@ -289,6 +348,7 @@ def run_perf_record(
     bench_binary: Path,
     perf_events: str,
     perf_output_dir: Path,
+    env: dict[str, str],
 ) -> dict[str, str]:
     perf_command: list[Union[str, os.PathLike[str]]] = ["perf", "record"]
     if perf_events:
@@ -297,7 +357,7 @@ def run_perf_record(
     perf_data_path = perf_output_dir / "perf.data"
     perf_report_path = perf_output_dir / "perf_report.txt"
     perf_command.extend(["-o", perf_data_path, bench_binary])
-    run_command(perf_command)
+    run_command(perf_command, env=env)
     report_command = ["perf", "report", "--stdio", "-i", os.fspath(perf_data_path)]
     display = " ".join(shlex.quote(part) for part in report_command)
     print(f"[run] {display}")
@@ -321,6 +381,7 @@ def run_perf_benchmark(
     perf_mode: str,
     perf_events: str,
     perf_output_dir: Path,
+    env: dict[str, str],
 ) -> dict[str, str]:
     bench_binary = build_bench_binary(bench_name)
     clean_directory(perf_output_dir)
@@ -333,10 +394,10 @@ def run_perf_benchmark(
         metadata["perf_events"] = perf_events
 
     if perf_mode in {"stat", "both"}:
-        metadata.update(run_perf_stat(bench_binary, perf_events, perf_output_dir))
+        metadata.update(run_perf_stat(bench_binary, perf_events, perf_output_dir, env))
 
     if perf_mode in {"record", "both"}:
-        metadata.update(run_perf_record(bench_binary, perf_events, perf_output_dir))
+        metadata.update(run_perf_record(bench_binary, perf_events, perf_output_dir, env))
 
     return metadata
 
@@ -346,6 +407,7 @@ def run_plotter(
     criterion_root: Path,
     plot_output_dir: Path,
     group: str,
+    selected_schemes: Sequence[str],
 ) -> None:
     plotter_path = PLOTTER_FILE_PATH
     if not plotter_path.exists():
@@ -355,18 +417,20 @@ def run_plotter(
         raise FileNotFoundError(f"Criterion output directory not found: {criterion_root}")
 
     clean_directory(plot_output_dir)
-    run_command(
-        [
-            python_executable,
-            plotter_path,
-            "--criterion-root",
-            criterion_root,
-            "--output-dir",
-            plot_output_dir,
-            "--group",
-            group,
-        ]
-    )
+    command: list[Union[str, os.PathLike[str]]] = [
+        python_executable,
+        plotter_path,
+        "--criterion-root",
+        criterion_root,
+        "--output-dir",
+        plot_output_dir,
+        "--group",
+        group,
+    ]
+    for scheme in selected_schemes:
+        command.extend(["--scheme", scheme])
+
+    run_command(command)
 
 
 def collect_plot_files(plot_output_dir: Path) -> list[Path]:
@@ -436,6 +500,8 @@ def main() -> int:
     perf_output_dir = resolve_repo_path(args.perf_output_dir)
     publish_dir = resolve_repo_path(args.publish_dir)
     python_executable = Path(sys.executable).resolve()
+    selected_schemes = normalize_selected_schemes(args.scheme)
+    selected_benchmark_env = benchmark_env(selected_schemes)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     python_version = verify_python_version()
@@ -453,17 +519,24 @@ def main() -> int:
     perf_metadata: dict[str, str] = {}
     if not args.skip_bench:
         if args.perf == "none":
-            run_benchmark(args.bench_name)
+            run_benchmark(args.bench_name, selected_benchmark_env)
         else:
             perf_metadata = run_perf_benchmark(
                 args.bench_name,
                 args.perf,
                 args.perf_events,
                 perf_output_dir,
+                selected_benchmark_env,
             )
 
     if not args.skip_plot:
-        run_plotter(python_executable, criterion_root, plot_output_dir, args.group)
+        run_plotter(
+            python_executable,
+            criterion_root,
+            plot_output_dir,
+            args.group,
+            selected_schemes,
+        )
 
     plots = collect_plot_files(plot_output_dir)
     metadata = {
@@ -474,6 +547,7 @@ def main() -> int:
         "rustc_version": rustc_version,
         "cargo_version": cargo_version,
         "bench_name": args.bench_name,
+        "selected_schemes": ",".join(selected_schemes) if selected_schemes else "all",
         "criterion_root": str(criterion_root),
         "plot_output_dir": str(plot_output_dir),
         "plot_count": str(len(plots)),
