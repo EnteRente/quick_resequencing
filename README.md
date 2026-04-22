@@ -3,7 +3,7 @@
 Benchmarking resequencing data structures and algorithms from QUIC and TCP implementations.
 The benchmarks are run with `Criterion` and `Rust`.
 
-## Quic(k) Guide
+## Quic(k) Usage
 Command pipline for running the benchmark pipeline:
 ```bash
 git clone <repo-url>
@@ -18,8 +18,8 @@ The repository now uses a Nix dev shell as the primary reproducible environment.
 The dev shell defined in [flake.nix](/Users/macenti/Documents/thesis_quic/quick_resequencing/flake.nix:1) provides:
 
 - `python3` with `matplotlib`
-- `rustc`
-- `cargo`
+- latest stable `rustc` and `cargo` from `rust-overlay`
+- `rustfmt`, `clippy`, and `rust-src`
 - `pkg-config`
 - `git`
 - Linux `perf` on Linux systems
@@ -42,7 +42,14 @@ The explicit equivalent is:
 nix develop -c python3 run_benchmark_pipeline.py
 ```
 
-If you want the dependency set to be fully pinned in git, commit `flake.lock` after generating it in your environment.
+The Rust toolchain is resolved through `rust-overlay` as the latest stable release available at the current `flake.lock` revision. For fully reproducible runs, generate and commit `flake.lock`:
+
+```bash
+nix flake update
+nix develop -c rustc --version
+```
+
+To intentionally move only the Rust overlay to a newer stable release later, run `nix flake update rust-overlay`.
 
 ## Pipeline Overview
 
@@ -119,6 +126,12 @@ Run both `perf stat` and `perf record` under the same pipeline timestamp:
 python3 run_benchmark_pipeline.py --perf both
 ```
 
+If your kernel requires elevated privileges for perf counters, use `--sudo-perf` instead of running the whole pipeline with `sudo`:
+
+```bash
+python3 run_benchmark_pipeline.py --perf stat --sudo-perf
+```
+
 Use a custom event list:
 
 ```bash
@@ -129,6 +142,7 @@ In `perf` mode the pipeline:
 
 - builds the Criterion bench executable with `cargo bench --bench resequencing_bench --no-run`
 - runs that bench binary directly under `perf`
+- prefixes only `perf stat`/`perf record` with `sudo` when `--sudo-perf` is set
 - runs the benchmark twice when `--perf both` is used: `stat` first, then `record`
 - still writes Criterion results to `target/criterion`
 - still runs `box_plotter.py` afterward so plots are generated from the benchmark output

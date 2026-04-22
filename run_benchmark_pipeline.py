@@ -98,6 +98,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional comma-separated perf event list passed via 'perf -e'.",
     )
     parser.add_argument(
+        "--sudo-perf",
+        action="store_true",
+        help="Prefix only the perf stat/record command with sudo; do not run the whole pipeline as root.",
+    )
+    parser.add_argument(
         "--perf-output-dir",
         type=Path,
         default=Path("target/perf_artifacts"),
@@ -229,7 +234,7 @@ def verify_rust_toolchain() -> tuple[str, str]:
     return rustc, cargo
 
 
-def verify_perf_support(perf_mode: str) -> None:
+def verify_perf_support(perf_mode: str, sudo_perf: bool) -> None:
     if perf_mode == "none":
         return
 
@@ -239,6 +244,29 @@ def verify_perf_support(perf_mode: str) -> None:
     perf_check = shutil.which("perf")
     if perf_check is None:
         raise RuntimeError("perf was requested, but the 'perf' executable was not found in PATH.")
+
+    if sudo_perf and not running_as_root() and shutil.which("sudo") is None:
+        raise RuntimeError("--sudo-perf was requested, but the 'sudo' executable was not found in PATH.")
+
+
+def running_as_root() -> bool:
+    return hasattr(os, "geteuid") and os.geteuid() == 0
+
+
+def perf_executable() -> str:
+    return shutil.which("perf") or "perf"
+
+
+def perf_command_prefix(sudo_perf: bool, env: dict[str, str]) -> list[str]:
+    if not sudo_perf or running_as_root():
+        return [perf_executable()]
+
+    command = ["sudo"]
+    if env:
+        preserved_env = ",".join(sorted(env))
+        command.append(f"--preserve-env={preserved_env}")
+    command.append(perf_executable())
+    return command
 
 
 def normalize_selected_schemes(raw_schemes: Sequence[str]) -> list[str]:
@@ -333,8 +361,10 @@ def run_perf_stat(
     perf_events: str,
     perf_output_dir: Path,
     env: dict[str, str],
+    sudo_perf: bool,
 ) -> dict[str, str]:
-    perf_command: list[Union[str, os.PathLike[str]]] = ["perf", "stat"]
+    perf_command: list[Union[str, os.PathLike[str]]] = perf_command_prefix(sudo_perf, env)
+    perf_command.append("stat")
     if perf_events:
         perf_command.extend(["-e", perf_events])
 
@@ -349,8 +379,10 @@ def run_perf_record(
     perf_events: str,
     perf_output_dir: Path,
     env: dict[str, str],
+    sudo_perf: bool,
 ) -> dict[str, str]:
-    perf_command: list[Union[str, os.PathLike[str]]] = ["perf", "record"]
+    perf_command: list[Union[str, os.PathLike[str]]] = perf_command_prefix(sudo_perf, env)
+    perf_command.append("record")
     if perf_events:
         perf_command.extend(["-e", perf_events])
 
@@ -358,7 +390,7 @@ def run_perf_record(
     perf_report_path = perf_output_dir / "perf_report.txt"
     perf_command.extend(["-o", perf_data_path, bench_binary])
     run_command(perf_command, env=env)
-    report_command = ["perf", "report", "--stdio", "-i", os.fspath(perf_data_path)]
+    report_command = [perf_executable(), "report", "--stdio", "-i", os.fspath(perf_data_path)]
     display = " ".join(shlex.quote(part) for part in report_command)
     print(f"[run] {display}")
     report_result = subprocess.run(
@@ -382,6 +414,7 @@ def run_perf_benchmark(
     perf_events: str,
     perf_output_dir: Path,
     env: dict[str, str],
+    sudo_perf: bool,
 ) -> dict[str, str]:
     bench_binary = build_bench_binary(bench_name)
     clean_directory(perf_output_dir)
@@ -389,15 +422,16 @@ def run_perf_benchmark(
     metadata = {
         "bench_binary": str(bench_binary),
         "perf_mode": perf_mode,
+        "sudo_perf": str(sudo_perf),
     }
     if perf_events:
         metadata["perf_events"] = perf_events
 
     if perf_mode in {"stat", "both"}:
-        metadata.update(run_perf_stat(bench_binary, perf_events, perf_output_dir, env))
+        metadata.update(run_perf_stat(bench_binary, perf_events, perf_output_dir, env, sudo_perf))
 
     if perf_mode in {"record", "both"}:
-        metadata.update(run_perf_record(bench_binary, perf_events, perf_output_dir, env))
+        metadata.update(run_perf_record(bench_binary, perf_events, perf_output_dir, env, sudo_perf))
 
     return metadata
 
@@ -507,7 +541,7 @@ def main() -> int:
     python_version = verify_python_version()
     verify_python_dependencies(skip_plot=args.skip_plot)
     rustc_version, cargo_version = verify_rust_toolchain()
-    verify_perf_support(args.perf)
+    verify_perf_support(args.perf, args.sudo_perf)
 
     print(
         "[info] Toolchain OK: "
@@ -527,6 +561,7 @@ def main() -> int:
                 args.perf_events,
                 perf_output_dir,
                 selected_benchmark_env,
+                args.sudo_perf,
             )
 
     if not args.skip_plot:

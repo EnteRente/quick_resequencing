@@ -27,7 +27,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
-from matplotlib.ticker import EngFormatter, LogLocator, NullFormatter
+from matplotlib.ticker import EngFormatter, MaxNLocator
 
 # Read criterion benchmark 'new' output files from target/criterion
 # Generate one plot per scenario family. Most scenarios use packet count on the
@@ -307,14 +307,11 @@ def build_time_axis(records: list[BenchmarkRecord]) -> tuple[float, float]:
         sample
         for record in records
         for sample in record.samples_seconds
-        if sample > 0.0
+        if sample >= 0.0
     ]
-    if not samples:
-        return 1e-12, 1.0
-
-    min_sample = min(samples)
     max_sample = max(samples)
-    return min_sample / 1.25, max_sample * 1.25
+    upper_limit = max_sample * 1.08 if max_sample > 0.0 else 1.0
+    return 0.0, upper_limit
 
 
 def plot_scenario_series(
@@ -441,11 +438,9 @@ def create_scenario_figure(
         ax.set_xticklabels([])
         draw_rotated_x_labels(ax, x_values, x_labels)
     ax.set_ylim(y_min, y_max)
-    ax.set_yscale("log")
-    ax.yaxis.set_major_locator(LogLocator(base=10, numticks=8))
-    ax.yaxis.set_minor_locator(LogLocator(base=10, subs=range(2, 10), numticks=12))
+    ax.set_yscale("linear")
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
     ax.yaxis.set_major_formatter(EngFormatter(unit="s"))
-    ax.yaxis.set_minor_formatter(NullFormatter())
     ax.grid(axis="x", which="major", linestyle=":", linewidth=0.6, alpha=0.16)
     ax.grid(axis="y", which="major", linestyle=":", linewidth=0.7, alpha=0.45)
     ax.set_axisbelow(True)
