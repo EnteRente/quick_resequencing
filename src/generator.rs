@@ -1,5 +1,7 @@
 use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
 use rand_distr::{Uniform, Normal, Distribution};
+use rand::seq::SliceRandom;
+const ERROR_PROBABILITY: f64 = 0.01;
 
 #[derive(Debug, Clone)]
 pub struct Packet {
@@ -74,7 +76,7 @@ pub struct GeneratorConfig {
 }
 
 impl GeneratorConfig {
-    pub fn new(packet_size: usize, packet_count: usize, seed: Option<u64>) -> Self {
+    pub fn new(packet_size: usize, packet_count: usize, seed: Option<u64>) -> Self { //TODO: make seed non-optional
         Self {
             packet_size,
             packet_count,
@@ -147,6 +149,7 @@ impl RandomLossGenerator {
     pub fn new(p: f64) -> Self { Self { p } }
 }
 
+
 impl OrderGenerator for RandomLossGenerator {
     fn generate(&self, config: &GeneratorConfig) -> Vec<u64> {
         let mut vec = Vec::with_capacity(config.packet_count);
@@ -154,6 +157,7 @@ impl OrderGenerator for RandomLossGenerator {
 
         let mut seeded_rng;
         let mut thread_rng;
+
         let rng: &mut dyn RngCore = if let Some(seed) = config.seed {
             seeded_rng = StdRng::seed_from_u64(seed);
             &mut seeded_rng
@@ -177,6 +181,39 @@ impl OrderGenerator for RandomLossGenerator {
     }
 
     fn name(&self) -> &'static str { "RandomLoss" }
+}
+
+pub struct ShuffleGenerator {}
+
+impl ShuffleGenerator {
+    pub fn new() -> Self { Self {} }
+}
+
+impl OrderGenerator for ShuffleGenerator {
+    fn generate(&self, config: &GeneratorConfig) -> Vec<u64> {
+        let mut order: Vec<u64>;
+
+        //TODO: move to a separate function
+        let mut seeded_rng;
+        let mut thread_rng;
+        let rng: &mut dyn RngCore = if let Some(seed) = config.seed {
+            seeded_rng = StdRng::seed_from_u64(seed);
+            &mut seeded_rng
+        } else {
+            thread_rng = rand::rng();
+            &mut thread_rng
+        };
+
+        order = (0.. config.packet_count as u64).collect();
+
+        order.shuffle(rng);
+
+        order
+    }
+
+    fn name(&self) -> &'static str {
+        "Shuffle"
+    }
 }
 
 /// Generate packets where "bursts" are jittered.
@@ -325,7 +362,8 @@ impl Default for GeneratorRegistry {
         let mut registry = Self::new();
         registry.register(InOrderGenerator::new());
         registry.register(FirstToLastGenerator::new());
-        //registry.register(RandomLossGenerator::new(ERROR_PROBABILITY));
+        registry.register(ShuffleGenerator::new());
+        registry.register(RandomLossGenerator::new(ERROR_PROBABILITY));
 
         registry
     }
