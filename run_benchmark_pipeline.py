@@ -22,16 +22,17 @@ PLOTTER_FILE_PATH = REPO_ROOT / "box_plotter.py"
 PIPELINE_FILE_PATH = REPO_ROOT / "run_benchmark_pipeline.py"
 NIX_DEV_ENV_VAR = "QUICK_RESEQUENCING_NIX_DEV"
 BENCH_SCHEMES_ENV_VAR = "QUICK_RESEQUENCING_SCHEMES"
-SCHEME_ORDER = ["InOrder", "FirstToLast", "RandomLoss"]
+SCHEME_ORDER = ["InOrder", "FirstToLast", "Shuffle", "RandomLoss", "RandomLossRate"]
 SCHEME_ALIASES = {
     "inorder": "InOrder",
     "in_order": "InOrder",
     "firsttolast": "FirstToLast",
     "first_to_last": "FirstToLast",
+    "shuffle": "Shuffle",
     "randomloss": "RandomLoss",
     "random_loss": "RandomLoss",
-    "randomlossrate": "RandomLoss",
-    "random_loss_rate": "RandomLoss",
+    "randomlossrate": "RandomLossRate",
+    "random_loss_rate": "RandomLossRate",
 }
 MIN_PYTHON = (3, 9, 0)
 MIN_RUST = (1, 85, 0)
@@ -79,7 +80,8 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help=(
             "Only benchmark and plot the given scheme. Repeat this option or use a "
-            "comma-separated list. Supported values: InOrder, FirstToLast, RandomLoss."
+            "comma-separated list. Supported values: InOrder, FirstToLast, Shuffle, "
+            "RandomLoss, RandomLossRate."
         ),
     )
     parser.add_argument(

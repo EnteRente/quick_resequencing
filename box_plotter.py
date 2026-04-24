@@ -31,7 +31,7 @@ from matplotlib.ticker import EngFormatter, MaxNLocator
 
 # Read criterion benchmark 'new' output files from target/criterion
 # Generate one plot per scenario family. Most scenarios use packet count on the
-# x-axis: the RandomLoss range uses loss rate instead.
+# x-axis; the RandomLossRate range uses loss rate instead.
 
 IMPLEMENTATION_NAMES = {
     "linux_tcp": "linux_tcp",
@@ -50,31 +50,49 @@ IMPLEMENTATION_COLORS = {
     "s2n-quic": "#2A9D8F",
     "lsquic": "#E76F51",
 }
+RANDOM_LOSS_SCENARIO = "RandomLoss"
 RANDOM_LOSS_RATE_SCENARIO = "RandomLossRate"
+SHUFFLE_SCENARIO = "Shuffle"
 RANDOM_LOSS_RATE_PATTERN = re.compile(r"^RandomLoss with (?P<percent>\d+(?:\.\d+)?)% loss$")
 SCHEME_ALIASES = {
-    "RandomLoss": RANDOM_LOSS_RATE_SCENARIO,
+    RANDOM_LOSS_SCENARIO: RANDOM_LOSS_SCENARIO,
     RANDOM_LOSS_RATE_SCENARIO: RANDOM_LOSS_RATE_SCENARIO,
+    SHUFFLE_SCENARIO: SHUFFLE_SCENARIO,
 }
 ALLOWED_SCENARIOS = [
     "InOrder",
     "FirstToLast",
+    SHUFFLE_SCENARIO,
+    RANDOM_LOSS_SCENARIO,
     RANDOM_LOSS_RATE_SCENARIO,
 ]
 SCENARIO_ORDER = [
     "InOrder",
     "FirstToLast",
+    SHUFFLE_SCENARIO,
+    RANDOM_LOSS_SCENARIO,
     RANDOM_LOSS_RATE_SCENARIO,
 ]
 SCENARIO_LABELS = {
     "InOrder": "In order",
     "FirstToLast": "First to last",
-    RANDOM_LOSS_RATE_SCENARIO: "Random loss",
+    SHUFFLE_SCENARIO: "Shuffle",
+    RANDOM_LOSS_SCENARIO: "Random loss",
+    RANDOM_LOSS_RATE_SCENARIO: "Random loss rate",
 }
 SCENARIO_X_LABELS = {
     "InOrder": "Packet count",
     "FirstToLast": "Packet count",
+    SHUFFLE_SCENARIO: "Packet count",
+    RANDOM_LOSS_SCENARIO: "Packet count",
     RANDOM_LOSS_RATE_SCENARIO: "Loss rate",
+}
+SCENARIO_FILE_SLUGS = {
+    "InOrder": "in_order",
+    "FirstToLast": "first_to_last",
+    SHUFFLE_SCENARIO: "shuffle",
+    RANDOM_LOSS_SCENARIO: "random_loss",
+    RANDOM_LOSS_RATE_SCENARIO: "random_loss_rate",
 }
 EXCLUDED_PACKET_COUNTS = {1_000_000}
 
@@ -283,6 +301,19 @@ def scenario_uses_loss_rate_axis(scenario: str) -> bool:
     return scenario == RANDOM_LOSS_RATE_SCENARIO
 
 
+def scenario_display_title(scenario: str, records: list[BenchmarkRecord]) -> str:
+    label = SCENARIO_LABELS.get(scenario, scenario)
+    if scenario != RANDOM_LOSS_RATE_SCENARIO:
+        return label
+
+    burst_sizes = sorted({record.size for record in records})
+    if len(burst_sizes) == 1:
+        return f"{label} ({burst_sizes[0]:,}-packet burst)"
+
+    burst_labels = ", ".join(f"{burst_size:,}" for burst_size in burst_sizes)
+    return f"{label} (bursts: {burst_labels} packets)"
+
+
 def implementation_offsets(count: int, spacing: float = 0.24) -> list[float]:
     midpoint = (count - 1) / 2.0
     return [(index - midpoint) * spacing for index in range(count)]
@@ -475,7 +506,7 @@ def create_scenario_figure(
         handletextpad=0.5,
     )
 
-    fig.suptitle(SCENARIO_LABELS.get(scenario, scenario), fontsize=15, x=0.12, y=0.985, ha="left")
+    fig.suptitle(scenario_display_title(scenario, records), fontsize=15, x=0.12, y=0.985, ha="left")
     fig.text(0.12, 0.945, group, fontsize=9, color="#5C5C5C", ha="left")
     fig.tight_layout(rect=(0.06, 0.16, 0.99, 0.88))
     return fig
@@ -526,7 +557,8 @@ def main() -> int:
             scenario,
             records_by_scenario[scenario],
         )
-        output_path = output_dir / f"scenario_{slugify(SCENARIO_LABELS.get(scenario, scenario))}.png"
+        scenario_slug = SCENARIO_FILE_SLUGS.get(scenario, slugify(scenario))
+        output_path = output_dir / f"scenario_{scenario_slug}.png"
         figure.savefig(output_path, dpi=args.dpi, bbox_inches="tight")
         plt.close(figure)
         print(f"Wrote boxplot to {output_path}")

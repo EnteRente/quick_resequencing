@@ -36,7 +36,9 @@ const BENCH_SCHEMES_ENV: &str = "QUICK_RESEQUENCING_SCHEMES";
 struct SchemeSelection {
     in_order: bool,
     first_to_last: bool,
+    shuffle: bool,
     random_loss: bool,
+    random_loss_rate: bool,
 }
 
 impl SchemeSelection {
@@ -44,7 +46,9 @@ impl SchemeSelection {
         Self {
             in_order: true,
             first_to_last: true,
+            shuffle: true,
             random_loss: true,
+            random_loss_rate: true,
         }
     }
 
@@ -59,14 +63,18 @@ impl SchemeSelection {
         let mut selection = Self {
             in_order: false,
             first_to_last: false,
+            shuffle: false,
             random_loss: false,
+            random_loss_rate: false,
         };
 
         for scheme in value.split(',').map(str::trim).filter(|scheme| !scheme.is_empty()) {
             match scheme {
                 "InOrder" => selection.in_order = true,
                 "FirstToLast" => selection.first_to_last = true,
-                "RandomLoss" | "RandomLossRate" => selection.random_loss = true,
+                "Shuffle" => selection.shuffle = true,
+                "RandomLoss" => selection.random_loss = true,
+                "RandomLossRate" => selection.random_loss_rate = true,
                 other => panic!("Unknown benchmark scheme in {BENCH_SCHEMES_ENV}: {other}"),
             }
         }
@@ -78,7 +86,9 @@ impl SchemeSelection {
         match scheme {
             "InOrder" => self.in_order,
             "FirstToLast" => self.first_to_last,
-            "RandomLoss" | "RandomLossRate" => self.random_loss,
+            "Shuffle" => self.shuffle,
+            "RandomLoss" => self.random_loss,
+            "RandomLossRate" => self.random_loss_rate,
             _ => false,
         }
     }
@@ -182,7 +192,7 @@ fn bench_main(c: &mut Criterion) {
 
     // TODO: "Hard coded" (i.e. not integrated into incorporated into the code structure as intended)
     // Random Loss 0% up to 10% error rate with 10_000 packets
-    if selected_schemes.includes("RandomLoss") {
+    if selected_schemes.includes("RandomLossRate") {
         group.throughput(Throughput::Elements(RANDOM_LOSS_PACKET_COUNT as u64));
         group.measurement_time(Duration::from_secs_f64(50.0));
 

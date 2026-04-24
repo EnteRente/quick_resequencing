@@ -182,7 +182,9 @@ The current `box_plotter.py` supports:
 
 - packet-count plots for `InOrder`
 - packet-count plots for `FirstToLast`
-- a dedicated random-loss plot where loss rates from `0%` to `10%` are compared
+- packet-count plots for `Shuffle`
+- packet-count plots for `RandomLoss`
+- a dedicated random-loss-rate plot where loss rates from `0%` to `10%` are compared
 
 The y-axis is linear and the plotted values are time per packet.
 
@@ -198,8 +200,9 @@ python3 run_benchmark_pipeline.py --help
 
 - [x] InOrder
 - [x] FirstToLast
+- [x] Shuffle
+- [x] RandomLoss by packet count
 - [x] RandomLoss from 0% to 10%
-- [ ] RandomPermutation (shuffle packets)
 - [ ] Overlapping packets
 - [ ] ...
 
