@@ -172,7 +172,7 @@ fn bench_main(c: &mut Criterion) {
         // Configure settings
         let config = GeneratorConfig::new(PACKET_SIZE, packet_count, Some(SEED));
         group.throughput(Throughput::Elements(packet_count as u64));
-        group.measurement_time(Duration::from_secs_f64(50.0));
+        group.measurement_time(Duration::from_secs_f64(100.0));
 
         for generator in generator_register.iter() {
             if !selected_schemes.includes(generator.name()) {
