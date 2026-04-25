@@ -30,8 +30,8 @@ from matplotlib.lines import Line2D
 from matplotlib.ticker import EngFormatter, MaxNLocator
 
 # Read criterion benchmark 'new' output files from target/criterion
-# Generate one plot per scenario family. Most scenarios use packet count on the
-# x-axis; the RandomLossRate range uses loss rate instead.
+# Generate one plot per scenario family. Most scenarios use packet burst size on
+# the x-axis; the RandomLossRate range uses loss rate instead.
 
 IMPLEMENTATION_NAMES = {
     "linux_tcp": "linux_tcp",
@@ -53,6 +53,7 @@ IMPLEMENTATION_COLORS = {
 RANDOM_LOSS_SCENARIO = "RandomLoss"
 RANDOM_LOSS_RATE_SCENARIO = "RandomLossRate"
 SHUFFLE_SCENARIO = "Shuffle"
+QUIC_GO_IMPLEMENTATION = "quic-go"
 RANDOM_LOSS_RATE_PATTERN = re.compile(r"^RandomLoss with (?P<percent>\d+(?:\.\d+)?)% loss$")
 SCHEME_ALIASES = {
     RANDOM_LOSS_SCENARIO: RANDOM_LOSS_SCENARIO,
@@ -81,10 +82,10 @@ SCENARIO_LABELS = {
     RANDOM_LOSS_RATE_SCENARIO: "Random loss rate",
 }
 SCENARIO_X_LABELS = {
-    "InOrder": "Packet count",
-    "FirstToLast": "Packet count",
-    SHUFFLE_SCENARIO: "Packet count",
-    RANDOM_LOSS_SCENARIO: "Packet count",
+    "InOrder": "Packet burst size",
+    "FirstToLast": "Packet burst size",
+    SHUFFLE_SCENARIO: "Packet burst size",
+    RANDOM_LOSS_SCENARIO: "Packet burst size",
     RANDOM_LOSS_RATE_SCENARIO: "Loss rate",
 }
 SCENARIO_FILE_SLUGS = {
@@ -107,6 +108,14 @@ class BenchmarkRecord:
     x_value: float
     x_label: str
     samples_seconds: list[float]
+
+
+@dataclass(frozen=True)
+class FigureSpec:
+    scenario: str
+    title: str
+    file_slug: str
+    records: list[BenchmarkRecord]
 
 
 def parse_args() -> argparse.Namespace:
@@ -145,12 +154,12 @@ def parse_args() -> argparse.Namespace:
         help="Only include the given scheme/case. Repeat to select more than one.",
     )
 
-    # Option to filter packet-count scenarios
+    # Option to filter packet burst sizes
     parser.add_argument(
         "--packet-count",
         action="append",
         default=[],
-        help="Only include the given packet count. Repeat to select more than one.",
+        help="Only include the given packet burst size. Repeat to select more than one.",
     )
 
     # Specify DPI of image
@@ -314,6 +323,39 @@ def scenario_display_title(scenario: str, records: list[BenchmarkRecord]) -> str
     return f"{label} (bursts: {burst_labels} packets)"
 
 
+def build_figure_specs(scenario: str, records: list[BenchmarkRecord]) -> list[FigureSpec]:
+    default_title = scenario_display_title(scenario, records)
+    default_slug = SCENARIO_FILE_SLUGS.get(scenario, slugify(scenario))
+
+    if scenario != SHUFFLE_SCENARIO:
+        return [FigureSpec(scenario, default_title, default_slug, records)]
+
+    quic_go_records = [
+        record for record in records if record.implementation == QUIC_GO_IMPLEMENTATION
+    ]
+    other_records = [
+        record for record in records if record.implementation != QUIC_GO_IMPLEMENTATION
+    ]
+
+    if not quic_go_records or not other_records:
+        return [FigureSpec(scenario, default_title, default_slug, records)]
+
+    return [
+        FigureSpec(
+            scenario,
+            f"{default_title} (quic-go)",
+            "shuffle_quic_go",
+            quic_go_records,
+        ),
+        FigureSpec(
+            scenario,
+            f"{default_title} (other implementations)",
+            "shuffle_others",
+            other_records,
+        ),
+    ]
+
+
 def implementation_offsets(count: int, spacing: float = 0.24) -> list[float]:
     midpoint = (count - 1) / 2.0
     return [(index - midpoint) * spacing for index in range(count)]
@@ -432,6 +474,7 @@ def create_scenario_figure(
     group: str,
     scenario: str,
     records: list[BenchmarkRecord],
+    title: str | None = None,
 ) -> plt.Figure:
     implementations = sorted(
         {record.implementation for record in records},
@@ -506,7 +549,7 @@ def create_scenario_figure(
         handletextpad=0.5,
     )
 
-    fig.suptitle(scenario_display_title(scenario, records), fontsize=15, x=0.12, y=0.985, ha="left")
+    fig.suptitle(title or scenario_display_title(scenario, records), fontsize=15, x=0.12, y=0.985, ha="left")
     fig.text(0.12, 0.945, group, fontsize=9, color="#5C5C5C", ha="left")
     fig.tight_layout(rect=(0.06, 0.16, 0.99, 0.88))
     return fig
@@ -543,7 +586,7 @@ def main() -> int:
     if not records:
         raise RuntimeError(
             f"No Criterion benchmark samples found under {criterion_root} "
-            "for the requested group/scheme/packet-count selection."
+            "for the requested group/scheme/packet-burst-size selection."
         )
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -552,16 +595,17 @@ def main() -> int:
         records_by_scenario[record.scenario].append(record)
 
     for scenario in sorted(records_by_scenario, key=scenario_sort_key):
-        figure = create_scenario_figure(
-            args.group,
-            scenario,
-            records_by_scenario[scenario],
-        )
-        scenario_slug = SCENARIO_FILE_SLUGS.get(scenario, slugify(scenario))
-        output_path = output_dir / f"scenario_{scenario_slug}.png"
-        figure.savefig(output_path, dpi=args.dpi, bbox_inches="tight")
-        plt.close(figure)
-        print(f"Wrote boxplot to {output_path}")
+        for figure_spec in build_figure_specs(scenario, records_by_scenario[scenario]):
+            figure = create_scenario_figure(
+                args.group,
+                figure_spec.scenario,
+                figure_spec.records,
+                title=figure_spec.title,
+            )
+            output_path = output_dir / f"scenario_{figure_spec.file_slug}.png"
+            figure.savefig(output_path, dpi=args.dpi, bbox_inches="tight")
+            plt.close(figure)
+            print(f"Wrote boxplot to {output_path}")
 
     return 0
 

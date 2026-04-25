@@ -180,10 +180,10 @@ The plotter reads Criterion JSON files from `target/criterion` and writes one PN
 
 The current `box_plotter.py` supports:
 
-- packet-count plots for `InOrder`
-- packet-count plots for `FirstToLast`
-- packet-count plots for `Shuffle`
-- packet-count plots for `RandomLoss`
+- packet-burst-size plots for `InOrder`
+- packet-burst-size plots for `FirstToLast`
+- split packet-burst-size plots for `Shuffle`: one for `quic-go`, one for the other implementations
+- packet-burst-size plots for `RandomLoss`
 - a dedicated random-loss-rate plot where loss rates from `0%` to `10%` are compared
 
 The y-axis is linear and the plotted values are time per packet.
@@ -201,7 +201,7 @@ python3 run_benchmark_pipeline.py --help
 - [x] InOrder
 - [x] FirstToLast
 - [x] Shuffle
-- [x] RandomLoss by packet count
+- [x] RandomLoss by packet burst size
 - [x] RandomLoss from 0% to 10%
 - [ ] Overlapping packets
 - [ ] ...
