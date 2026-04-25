@@ -53,7 +53,7 @@ IMPLEMENTATION_COLORS = {
 RANDOM_LOSS_SCENARIO = "RandomLoss"
 RANDOM_LOSS_RATE_SCENARIO = "RandomLossRate"
 SHUFFLE_SCENARIO = "Shuffle"
-QUIC_GO_IMPLEMENTATION = "quic-go"
+SHUFFLE_FOCUS_IMPLEMENTATIONS = {"quic-go", "s2n-quic"}
 RANDOM_LOSS_RATE_PATTERN = re.compile(r"^RandomLoss with (?P<percent>\d+(?:\.\d+)?)% loss$")
 SCHEME_ALIASES = {
     RANDOM_LOSS_SCENARIO: RANDOM_LOSS_SCENARIO,
@@ -330,22 +330,22 @@ def build_figure_specs(scenario: str, records: list[BenchmarkRecord]) -> list[Fi
     if scenario != SHUFFLE_SCENARIO:
         return [FigureSpec(scenario, default_title, default_slug, records)]
 
-    quic_go_records = [
-        record for record in records if record.implementation == QUIC_GO_IMPLEMENTATION
+    focus_records = [
+        record for record in records if record.implementation in SHUFFLE_FOCUS_IMPLEMENTATIONS
     ]
     other_records = [
-        record for record in records if record.implementation != QUIC_GO_IMPLEMENTATION
+        record for record in records if record.implementation not in SHUFFLE_FOCUS_IMPLEMENTATIONS
     ]
 
-    if not quic_go_records or not other_records:
+    if not focus_records or not other_records:
         return [FigureSpec(scenario, default_title, default_slug, records)]
 
     return [
         FigureSpec(
             scenario,
-            f"{default_title} (quic-go)",
-            "shuffle_quic_go",
-            quic_go_records,
+            f"{default_title} (quic-go + s2n-quic)",
+            "shuffle_quic_go_s2n_quic",
+            focus_records,
         ),
         FigureSpec(
             scenario,

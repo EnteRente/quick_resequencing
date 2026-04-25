@@ -182,7 +182,7 @@ The current `box_plotter.py` supports:
 
 - packet-burst-size plots for `InOrder`
 - packet-burst-size plots for `FirstToLast`
-- split packet-burst-size plots for `Shuffle`: one for `quic-go`, one for the other implementations
+- split packet-burst-size plots for `Shuffle`: one for `quic-go + s2n-quic`, one for the other implementations
 - packet-burst-size plots for `RandomLoss`
 - a dedicated random-loss-rate plot where loss rates from `0%` to `10%` are compared
 
