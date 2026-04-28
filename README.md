@@ -138,6 +138,12 @@ Use a custom event list:
 python3 run_benchmark_pipeline.py --perf stat --perf-events cycles,instructions,cache-misses,branches,branch-misses
 ```
 
+The event option can also be repeated:
+
+```bash
+python3 run_benchmark_pipeline.py --perf stat --perf-events cycles --perf-events instructions --perf-events cache-misses
+```
+
 In `perf` mode the pipeline:
 
 - builds the Criterion bench executable with `cargo bench --bench resequencing_bench --no-run`

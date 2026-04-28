@@ -96,8 +96,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--perf-events",
-        default="",
-        help="Optional comma-separated perf event list passed via 'perf -e'.",
+        action="append",
+        default=[],
+        nargs="+",
+        metavar="EVENT",
+        help=(
+            "Optional perf event selector. Repeat this option, pass multiple "
+            "space-separated events, or use comma-separated lists."
+        ),
     )
     parser.add_argument(
         "--sudo-perf",
@@ -303,6 +309,39 @@ def benchmark_env(selected_schemes: Sequence[str]) -> dict[str, str]:
     return {BENCH_SCHEMES_ENV_VAR: ",".join(selected_schemes)}
 
 
+def split_perf_event_list(raw_value: str) -> list[str]:
+    events: list[str] = []
+    brace_depth = 0
+    in_pmu_config = False
+    start = 0
+
+    for index, char in enumerate(raw_value):
+        if char == "{":
+            brace_depth += 1
+        elif char == "}" and brace_depth:
+            brace_depth -= 1
+        elif char == "/" and brace_depth == 0:
+            in_pmu_config = not in_pmu_config
+        elif char == "," and brace_depth == 0 and not in_pmu_config:
+            events.append(raw_value[start:index])
+            start = index + 1
+
+    events.append(raw_value[start:])
+    return events
+
+
+def normalize_perf_events(raw_perf_events: Sequence[Sequence[str]]) -> list[str]:
+    events: list[str] = []
+    for event_group in raw_perf_events:
+        for raw_value in event_group:
+            for raw_event in split_perf_event_list(raw_value):
+                event = raw_event.strip()
+                if event and event not in events:
+                    events.append(event)
+
+    return events
+
+
 def clean_directory(path: Path) -> None:
     if path.exists():
         shutil.rmtree(path)
@@ -413,15 +452,15 @@ def archive_perf_context(perf_output_dir: Path, bench_binary: Path) -> dict[str,
 
 def run_perf_stat(
     bench_binary: Path,
-    perf_events: str,
+    perf_events: Sequence[str],
     perf_output_dir: Path,
     env: dict[str, str],
     sudo_perf: bool,
 ) -> dict[str, str]:
     perf_command: list[Union[str, os.PathLike[str]]] = perf_command_prefix(sudo_perf, env)
     perf_command.append("stat")
-    if perf_events:
-        perf_command.extend(["-e", perf_events])
+    for event in perf_events:
+        perf_command.extend(["-e", event])
 
     perf_stat_path = perf_output_dir / "perf_stat.txt"
     perf_command.extend(["-d", "-d", "-d", "-o", perf_stat_path, bench_binary])
@@ -431,15 +470,15 @@ def run_perf_stat(
 
 def run_perf_record(
     bench_binary: Path,
-    perf_events: str,
+    perf_events: Sequence[str],
     perf_output_dir: Path,
     env: dict[str, str],
     sudo_perf: bool,
 ) -> dict[str, str]:
     perf_command: list[Union[str, os.PathLike[str]]] = perf_command_prefix(sudo_perf, env)
     perf_command.append("record")
-    if perf_events:
-        perf_command.extend(["-e", perf_events])
+    for event in perf_events:
+        perf_command.extend(["-e", event])
 
     perf_data_path = perf_output_dir / "perf.data"
     perf_report_path = perf_output_dir / "perf_report.txt"
@@ -466,7 +505,7 @@ def run_perf_record(
 def run_perf_benchmark(
     bench_name: str,
     perf_mode: str,
-    perf_events: str,
+    perf_events: Sequence[str],
     perf_output_dir: Path,
     env: dict[str, str],
     sudo_perf: bool,
@@ -481,7 +520,7 @@ def run_perf_benchmark(
     }
     metadata.update(archive_perf_context(perf_output_dir, bench_binary))
     if perf_events:
-        metadata["perf_events"] = perf_events
+        metadata["perf_events"] = ",".join(perf_events)
 
     if perf_mode in {"stat", "both"}:
         metadata.update(run_perf_stat(bench_binary, perf_events, perf_output_dir, env, sudo_perf))
@@ -613,6 +652,7 @@ def main() -> int:
     python_executable = Path(sys.executable).resolve()
     selected_schemes = normalize_selected_schemes(args.scheme)
     selected_benchmark_env = benchmark_env(selected_schemes)
+    perf_events = normalize_perf_events(args.perf_events)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     python_version = verify_python_version()
@@ -635,7 +675,7 @@ def main() -> int:
             perf_metadata = run_perf_benchmark(
                 args.bench_name,
                 args.perf,
-                args.perf_events,
+                perf_events,
                 perf_output_dir,
                 selected_benchmark_env,
                 args.sudo_perf,
