@@ -144,10 +144,25 @@ The event option can also be repeated:
 python3 run_benchmark_pipeline.py --perf stat --perf-events cycles --perf-events instructions --perf-events cache-misses
 ```
 
+Run separate `perf` measurements for each implementation:
+
+```bash
+python3 run_benchmark_pipeline.py --perf stat --perf-by-implementation --perf-events cycles,instructions,cache-misses
+```
+
+Run separate measurements for only selected implementations:
+
+```bash
+python3 run_benchmark_pipeline.py --perf stat --implementation quiche --implementation quic-go
+```
+
+When split by implementation, the pipeline sets `QUICK_RESEQUENCING_IMPLEMENTATIONS` so the benchmark harness only registers that implementation. Results are written under implementation-specific folders such as `benchmark_results/perf/latest/quiche/perf_stat.txt` and `benchmark_results/perf/latest/quic-go/perf_stat.txt`.
+
 In `perf` mode the pipeline:
 
 - builds the Criterion bench executable with `cargo bench --bench resequencing_bench --no-run`
 - runs that bench binary directly under `perf`
+- runs one filtered `perf` command per implementation when `--perf-by-implementation` or `--implementation` is used
 - prefixes only `perf stat`/`perf record` with `sudo` when `--sudo-perf` is set
 - runs the benchmark twice when `--perf both` is used: `stat` first, then `record`
 - still writes Criterion results to `target/criterion`

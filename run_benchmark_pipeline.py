@@ -22,6 +22,7 @@ PLOTTER_FILE_PATH = REPO_ROOT / "box_plotter.py"
 PIPELINE_FILE_PATH = REPO_ROOT / "run_benchmark_pipeline.py"
 NIX_DEV_ENV_VAR = "QUICK_RESEQUENCING_NIX_DEV"
 BENCH_SCHEMES_ENV_VAR = "QUICK_RESEQUENCING_SCHEMES"
+BENCH_IMPLEMENTATIONS_ENV_VAR = "QUICK_RESEQUENCING_IMPLEMENTATIONS"
 SCHEME_ORDER = ["InOrder", "FirstToLast", "Shuffle", "RandomLoss", "RandomLossRate"]
 SCHEME_ALIASES = {
     "inorder": "InOrder",
@@ -33,6 +34,20 @@ SCHEME_ALIASES = {
     "random_loss": "RandomLoss",
     "randomlossrate": "RandomLossRate",
     "random_loss_rate": "RandomLossRate",
+}
+IMPLEMENTATION_ORDER = ["quiche", "quic-go", "linux_tcp", "s2n-quic", "lsquic"]
+IMPLEMENTATION_ALIASES = {
+    "quiche": "quiche",
+    "quicgo": "quic-go",
+    "quic_go": "quic-go",
+    "quic-go": "quic-go",
+    "linux_tcp": "linux_tcp",
+    "linux-tcp": "linux_tcp",
+    "tcp": "linux_tcp",
+    "s2n": "s2n-quic",
+    "s2n_quic": "s2n-quic",
+    "s2n-quic": "s2n-quic",
+    "lsquic": "lsquic",
 }
 MIN_PYTHON = (3, 9, 0)
 MIN_RUST = (1, 85, 0)
@@ -103,6 +118,21 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Optional perf event selector. Repeat this option, pass multiple "
             "space-separated events, or use comma-separated lists."
+        ),
+    )
+    parser.add_argument(
+        "--perf-by-implementation",
+        action="store_true",
+        help="Run perf separately for each receive-buffer implementation.",
+    )
+    parser.add_argument(
+        "--implementation",
+        action="append",
+        default=[],
+        help=(
+            "Only run perf for the given implementation. Repeat this option or "
+            "use a comma-separated list. Supported values: quiche, quic-go, "
+            "linux_tcp, s2n-quic, lsquic."
         ),
     )
     parser.add_argument(
@@ -303,6 +333,41 @@ def normalize_selected_schemes(raw_schemes: Sequence[str]) -> list[str]:
     return sorted(selected, key=SCHEME_ORDER.index)
 
 
+def normalize_selected_implementations(
+    raw_implementations: Sequence[str],
+    *,
+    default_to_all: bool,
+) -> list[str]:
+    if not raw_implementations:
+        return list(IMPLEMENTATION_ORDER) if default_to_all else []
+
+    selected: list[str] = []
+    for raw_value in raw_implementations:
+        for raw_implementation in raw_value.split(","):
+            implementation = raw_implementation.strip()
+            if not implementation:
+                continue
+
+            key = implementation.replace("-", "_").lower()
+            if key == "all":
+                return list(IMPLEMENTATION_ORDER)
+
+            canonical = IMPLEMENTATION_ALIASES.get(key)
+            if canonical is None:
+                allowed = ", ".join(IMPLEMENTATION_ORDER)
+                raise ValueError(
+                    f"Unknown implementation '{implementation}'. Supported values: {allowed}"
+                )
+
+            if canonical not in selected:
+                selected.append(canonical)
+
+    if not selected and default_to_all:
+        return list(IMPLEMENTATION_ORDER)
+
+    return sorted(selected, key=IMPLEMENTATION_ORDER.index)
+
+
 def benchmark_env(selected_schemes: Sequence[str]) -> dict[str, str]:
     if not selected_schemes:
         return {}
@@ -340,6 +405,13 @@ def normalize_perf_events(raw_perf_events: Sequence[Sequence[str]]) -> list[str]
                     events.append(event)
 
     return events
+
+
+def safe_path_component(value: str) -> str:
+    safe_value = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_")
+    if not safe_value:
+        raise ValueError(f"Cannot derive a filesystem-safe name from: {value!r}")
+    return safe_value
 
 
 def clean_directory(path: Path) -> None:
@@ -456,6 +528,7 @@ def run_perf_stat(
     perf_output_dir: Path,
     env: dict[str, str],
     sudo_perf: bool,
+    bench_args: Sequence[str] = (),
 ) -> dict[str, str]:
     perf_command: list[Union[str, os.PathLike[str]]] = perf_command_prefix(sudo_perf, env)
     perf_command.append("stat")
@@ -463,7 +536,7 @@ def run_perf_stat(
         perf_command.extend(["-e", event])
 
     perf_stat_path = perf_output_dir / "perf_stat.txt"
-    perf_command.extend(["-d", "-d", "-d", "-o", perf_stat_path, bench_binary])
+    perf_command.extend(["-d", "-d", "-d", "-o", perf_stat_path, bench_binary, *bench_args])
     run_command(perf_command, env=env)
     return {"perf_stat_path": str(perf_stat_path)}
 
@@ -474,6 +547,7 @@ def run_perf_record(
     perf_output_dir: Path,
     env: dict[str, str],
     sudo_perf: bool,
+    bench_args: Sequence[str] = (),
 ) -> dict[str, str]:
     perf_command: list[Union[str, os.PathLike[str]]] = perf_command_prefix(sudo_perf, env)
     perf_command.append("record")
@@ -482,7 +556,7 @@ def run_perf_record(
 
     perf_data_path = perf_output_dir / "perf.data"
     perf_report_path = perf_output_dir / "perf_report.txt"
-    perf_command.extend(["-o", perf_data_path, bench_binary])
+    perf_command.extend(["-o", perf_data_path, bench_binary, *bench_args])
     run_command(perf_command, env=env)
     report_command = [perf_executable(), "report", "--stdio", "-i", os.fspath(perf_data_path)]
     display = " ".join(shlex.quote(part) for part in report_command)
@@ -509,9 +583,11 @@ def run_perf_benchmark(
     perf_output_dir: Path,
     env: dict[str, str],
     sudo_perf: bool,
+    bench_filter: Optional[str] = None,
 ) -> dict[str, str]:
     bench_binary = build_bench_binary(bench_name)
     clean_directory(perf_output_dir)
+    bench_args = [bench_filter] if bench_filter else []
 
     metadata = {
         "bench_binary": str(bench_binary),
@@ -521,13 +597,95 @@ def run_perf_benchmark(
     metadata.update(archive_perf_context(perf_output_dir, bench_binary))
     if perf_events:
         metadata["perf_events"] = ",".join(perf_events)
+    if bench_filter:
+        metadata["criterion_filter"] = bench_filter
 
     if perf_mode in {"stat", "both"}:
-        metadata.update(run_perf_stat(bench_binary, perf_events, perf_output_dir, env, sudo_perf))
+        metadata.update(
+            run_perf_stat(bench_binary, perf_events, perf_output_dir, env, sudo_perf, bench_args)
+        )
 
     if perf_mode in {"record", "both"}:
-        metadata.update(run_perf_record(bench_binary, perf_events, perf_output_dir, env, sudo_perf))
+        metadata.update(
+            run_perf_record(bench_binary, perf_events, perf_output_dir, env, sudo_perf, bench_args)
+        )
 
+    return metadata
+
+
+def run_perf_benchmarks_by_implementation(
+    bench_name: str,
+    perf_mode: str,
+    perf_events: Sequence[str],
+    perf_output_dir: Path,
+    env: dict[str, str],
+    sudo_perf: bool,
+    implementations: Sequence[str],
+) -> dict[str, str]:
+    bench_binary = build_bench_binary(bench_name)
+    clean_directory(perf_output_dir)
+
+    metadata = {
+        "bench_binary": str(bench_binary),
+        "perf_mode": perf_mode,
+        "sudo_perf": str(sudo_perf),
+        "perf_by_implementation": "true",
+        "perf_implementations": ",".join(implementations),
+    }
+    metadata.update(archive_perf_context(perf_output_dir, bench_binary))
+    if perf_events:
+        metadata["perf_events"] = ",".join(perf_events)
+
+    result_dirs: list[str] = []
+    for implementation in implementations:
+        implementation_dir_name = safe_path_component(implementation)
+        implementation_dir = perf_output_dir / implementation_dir_name
+        implementation_dir.mkdir(parents=True, exist_ok=True)
+        bench_args = [implementation]
+        implementation_env = dict(env)
+        implementation_env[BENCH_IMPLEMENTATIONS_ENV_VAR] = implementation
+        result_dirs.append(implementation_dir_name)
+
+        implementation_metadata = dict(metadata)
+        implementation_metadata.update(
+            {
+                "implementation": implementation,
+                "criterion_filter": implementation,
+                "perf_output_dir": str(implementation_dir),
+            }
+        )
+
+        if perf_mode in {"stat", "both"}:
+            implementation_metadata.update(
+                run_perf_stat(
+                    bench_binary,
+                    perf_events,
+                    implementation_dir,
+                    implementation_env,
+                    sudo_perf,
+                    bench_args,
+                )
+            )
+
+        if perf_mode in {"record", "both"}:
+            implementation_metadata.update(
+                run_perf_record(
+                    bench_binary,
+                    perf_events,
+                    implementation_dir,
+                    implementation_env,
+                    sudo_perf,
+                    bench_args,
+                )
+            )
+
+        metadata_path = implementation_dir / "run_metadata.json"
+        metadata_path.write_text(
+            json.dumps(implementation_metadata, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    metadata["implementation_result_dirs"] = ",".join(result_dirs)
     return metadata
 
 
@@ -653,7 +811,14 @@ def main() -> int:
     selected_schemes = normalize_selected_schemes(args.scheme)
     selected_benchmark_env = benchmark_env(selected_schemes)
     perf_events = normalize_perf_events(args.perf_events)
+    selected_implementations = normalize_selected_implementations(
+        args.implementation,
+        default_to_all=args.perf_by_implementation,
+    )
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if args.perf == "none" and (args.perf_by_implementation or selected_implementations):
+        raise RuntimeError("--perf-by-implementation/--implementation requires --perf stat, record, or both.")
 
     python_version = verify_python_version()
     verify_python_dependencies(skip_plot=args.skip_plot)
@@ -671,6 +836,16 @@ def main() -> int:
     if not args.skip_bench:
         if args.perf == "none":
             run_benchmark(args.bench_name, selected_benchmark_env)
+        elif args.perf_by_implementation or selected_implementations:
+            perf_metadata = run_perf_benchmarks_by_implementation(
+                args.bench_name,
+                args.perf,
+                perf_events,
+                perf_output_dir,
+                selected_benchmark_env,
+                args.sudo_perf,
+                selected_implementations,
+            )
         else:
             perf_metadata = run_perf_benchmark(
                 args.bench_name,
@@ -700,6 +875,9 @@ def main() -> int:
         "cargo_version": cargo_version,
         "bench_name": args.bench_name,
         "selected_schemes": ",".join(selected_schemes) if selected_schemes else "all",
+        "selected_implementations": (
+            ",".join(selected_implementations) if selected_implementations else "aggregate"
+        ),
         "criterion_root": str(criterion_root),
         "plot_output_dir": str(plot_output_dir),
         "plot_count": str(len(plots)),

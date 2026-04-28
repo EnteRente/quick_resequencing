@@ -1,17 +1,18 @@
 use std::env;
-use std::time::Duration;
 use std::hint::black_box;
+use std::time::Duration;
 
-use criterion::{criterion_group, criterion_main, Criterion, Throughput, BenchmarkId, BatchSize};
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 
+use quick_resequencing::generator::{
+    BenchmarkData, GeneratorConfig, GeneratorRegistry, OrderGenerator, RandomLossGenerator,
+};
 use quick_resequencing::RecvBuffer;
-use quick_resequencing::generator::
-    {GeneratorRegistry, BenchmarkData, GeneratorConfig, RandomLossGenerator, OrderGenerator};
 
-use quiche::RecvBuf;
-use quicgo_sorter::QuicGoFrameSorter;
 use linux_tcp_sorter::TcpOfoQueue;
 use lsquic::ReassemblyEngine;
+use quicgo_sorter::QuicGoFrameSorter;
+use quiche::RecvBuf;
 use s2n_quic::buffer::Reassembler;
 
 // Assumption for both TCP and QUIC
@@ -29,9 +30,11 @@ const RANDOM_LOSS_PACKET_COUNT: usize = 10_000;
 // For reproducibility, use a fixed seed
 const SEED: u64 = 42;
 
-const ERROR_RATES : [f64; 11] = [0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1];
+const ERROR_RATES: [f64; 11] = [
+    0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1,
+];
 const BENCH_SCHEMES_ENV: &str = "QUICK_RESEQUENCING_SCHEMES";
-
+const BENCH_IMPLEMENTATIONS_ENV: &str = "QUICK_RESEQUENCING_IMPLEMENTATIONS";
 
 struct SchemeSelection {
     in_order: bool,
@@ -42,7 +45,8 @@ struct SchemeSelection {
 }
 
 impl SchemeSelection {
-    fn all() -> Self { // Default
+    fn all() -> Self {
+        // Default
         Self {
             in_order: true,
             first_to_last: true,
@@ -68,7 +72,11 @@ impl SchemeSelection {
             random_loss_rate: false,
         };
 
-        for scheme in value.split(',').map(str::trim).filter(|scheme| !scheme.is_empty()) {
+        for scheme in value
+            .split(',')
+            .map(str::trim)
+            .filter(|scheme| !scheme.is_empty())
+        {
             match scheme {
                 "InOrder" => selection.in_order = true,
                 "FirstToLast" => selection.first_to_last = true,
@@ -94,25 +102,94 @@ impl SchemeSelection {
     }
 }
 
+struct ImplementationSelection {
+    quiche: bool,
+    quic_go: bool,
+    linux_tcp: bool,
+    s2n_quic: bool,
+    lsquic: bool,
+}
+
+impl ImplementationSelection {
+    fn all() -> Self {
+        Self {
+            quiche: true,
+            quic_go: true,
+            linux_tcp: true,
+            s2n_quic: true,
+            lsquic: true,
+        }
+    }
+
+    fn from_env() -> Self {
+        let Ok(value) = env::var(BENCH_IMPLEMENTATIONS_ENV) else {
+            return Self::all();
+        };
+        if value.trim().is_empty() {
+            return Self::all();
+        }
+
+        let mut selection = Self {
+            quiche: false,
+            quic_go: false,
+            linux_tcp: false,
+            s2n_quic: false,
+            lsquic: false,
+        };
+
+        for implementation in value
+            .split(',')
+            .map(str::trim)
+            .filter(|implementation| !implementation.is_empty())
+        {
+            match implementation {
+                "all" => return Self::all(),
+                "quiche" => selection.quiche = true,
+                "quic-go" | "quicgo" | "quic_go" => selection.quic_go = true,
+                "linux_tcp" | "linux-tcp" | "tcp" => selection.linux_tcp = true,
+                "s2n-quic" | "s2n_quic" | "s2n" => selection.s2n_quic = true,
+                "lsquic" => selection.lsquic = true,
+                other => panic!(
+                    "Unknown benchmark implementation in {BENCH_IMPLEMENTATIONS_ENV}: {other}"
+                ),
+            }
+        }
+
+        selection
+    }
+
+    fn includes(&self, implementation: &str) -> bool {
+        match implementation {
+            "quiche" => self.quiche,
+            "quic-go" => self.quic_go,
+            "linux_tcp" => self.linux_tcp,
+            "s2n-quic" => self.s2n_quic,
+            "lsquic" => self.lsquic,
+            _ => false,
+        }
+    }
+}
 
 /// Macro to reduce boilerplate when benchmarking multiple implementations
 macro_rules! bench_implementations {
-    ($group:expr, $bench_id:expr, $benchmark_data:expr, $( $impl:ty ),+ $(,)?) => {
+    ($group:expr, $bench_id:expr, $benchmark_data:expr, $selected_implementations:expr, $( $impl:ty ),+ $(,)?) => {
         $(
-            $group.bench_function(
-                BenchmarkId::new(<$impl as RecvBuffer>::name(), &$bench_id),
-                |b| {
-                    b.iter_batched(
-                        || <$impl as RecvBuffer>::new(),
-                        |mut recv_buf| {
-                            bench_recv_buf(&mut recv_buf, black_box($benchmark_data));
-                            black_box(recv_buf);
-                        },
-                        BatchSize::LargeInput,
+            if $selected_implementations.includes(<$impl as RecvBuffer>::name()) {
+                $group.bench_function(
+                    BenchmarkId::new(<$impl as RecvBuffer>::name(), &$bench_id),
+                    |b| {
+                        b.iter_batched(
+                            || <$impl as RecvBuffer>::new(),
+                            |mut recv_buf| {
+                                bench_recv_buf(&mut recv_buf, black_box($benchmark_data));
+                                black_box(recv_buf);
+                            },
+                            BatchSize::LargeInput,
 
-                    )
-                },
-            );
+                        )
+                    },
+                );
+            }
         )+
     };
 }
@@ -120,9 +197,10 @@ macro_rules! bench_implementations {
 fn bench_config(
     group: &mut criterion::BenchmarkGroup<criterion::measurement::WallTime>,
     benchmark_data: &BenchmarkData,
+    selected_implementations: &ImplementationSelection,
     generator_name: &str,
-    num_of_packets: usize) {
-
+    num_of_packets: usize,
+) {
     //TODO: fix bench_id formatting
     let bench_id = format!("{}/{}", generator_name, num_of_packets);
 
@@ -130,19 +208,18 @@ fn bench_config(
         group,
         bench_id,
         benchmark_data,
+        selected_implementations,
         RecvBuf, //cloudflare quiche
         QuicGoFrameSorter,
         TcpOfoQueue,
-        Reassembler, //s2n-quic
+        Reassembler,      //s2n-quic
         ReassemblyEngine, //lsquic
     );
 }
 
-
 /// Benchmark the receive buffer under test.
 /// Insert and drain in a loop
 fn bench_recv_buf<T: RecvBuffer>(recv_buf: &mut T, bench_data: &BenchmarkData) {
-
     for packet in bench_data.get_packets() {
         let length = packet.get_length();
         let offset = packet.get_offset();
@@ -167,6 +244,7 @@ fn bench_main(c: &mut Criterion) {
     let mut group = c.benchmark_group("Comparison of Resequencing Data Structures");
     let generator_register = GeneratorRegistry::default();
     let selected_schemes = SchemeSelection::from_env();
+    let selected_implementations = ImplementationSelection::from_env();
 
     for packet_count in NUM_OF_PACKETS {
         // Configure settings
@@ -184,6 +262,7 @@ fn bench_main(c: &mut Criterion) {
             bench_config(
                 &mut group,
                 &benchmark_data,
+                &selected_implementations,
                 generator.name(),
                 packet_count,
             );
@@ -205,6 +284,7 @@ fn bench_main(c: &mut Criterion) {
             bench_config(
                 &mut group,
                 &benchmark_data,
+                &selected_implementations,
                 &loss_label,
                 RANDOM_LOSS_PACKET_COUNT,
             )
