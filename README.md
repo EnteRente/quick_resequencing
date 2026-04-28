@@ -102,9 +102,9 @@ The pipeline uses these directories:
 - `target/perf_artifacts`
   raw intermediate `perf` output before publishing
 - `benchmark_results/perf/latest`
-  latest published `perf` results
+  latest published `perf` results, including `perf.data` when available
 - `benchmark_results/perf/runs/<timestamp>`
-  archived `perf` output for a specific run
+  archived `perf` output for a specific run, plus the built bench binary and git context under `context/`
 
 ## Linux Perf Runs
 
@@ -147,6 +147,7 @@ In `perf` mode the pipeline:
 - still writes Criterion results to `target/criterion`
 - still runs `box_plotter.py` afterward so plots are generated from the benchmark output
 - publishes the `perf` artifacts into `benchmark_results/perf/`
+- archives `perf.data` for `record`/`both` runs together with the exact bench binary and git commit/status metadata
 
 ## Useful Variants
 

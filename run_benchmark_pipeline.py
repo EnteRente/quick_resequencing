@@ -358,6 +358,59 @@ def build_bench_binary(bench_name: str) -> Path:
     return bench_binary
 
 
+def git_output(args: Sequence[str]) -> Optional[str]:
+    if shutil.which("git") is None:
+        return None
+
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=REPO_ROOT,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return None
+
+    return result.stdout.strip()
+
+
+def archive_perf_context(perf_output_dir: Path, bench_binary: Path) -> dict[str, str]:
+    context_dir = perf_output_dir / "context"
+    context_dir.mkdir(parents=True, exist_ok=True)
+
+    archived_bench_binary = context_dir / bench_binary.name
+    shutil.copy2(bench_binary, archived_bench_binary)
+
+    metadata = {
+        "archived_bench_binary": f"context/{archived_bench_binary.name}",
+    }
+
+    git_commit = git_output(["rev-parse", "HEAD"])
+    if git_commit:
+        (context_dir / "git_commit.txt").write_text(git_commit + "\n", encoding="utf-8")
+        metadata["git_commit"] = git_commit
+        metadata["archived_git_commit"] = "context/git_commit.txt"
+
+    git_short_commit = git_output(["rev-parse", "--short", "HEAD"])
+    if git_short_commit:
+        metadata["git_commit_short"] = git_short_commit
+
+    git_status = git_output(["status", "--short"])
+    if git_status is not None:
+        status_path = context_dir / "git_status.txt"
+        status_path.write_text(
+            git_status + ("\n" if git_status else ""),
+            encoding="utf-8",
+        )
+        metadata["git_dirty"] = str(bool(git_status))
+        metadata["archived_git_status"] = "context/git_status.txt"
+
+    return metadata
+
+
 def run_perf_stat(
     bench_binary: Path,
     perf_events: str,
@@ -426,6 +479,7 @@ def run_perf_benchmark(
         "perf_mode": perf_mode,
         "sudo_perf": str(sudo_perf),
     }
+    metadata.update(archive_perf_context(perf_output_dir, bench_binary))
     if perf_events:
         metadata["perf_events"] = perf_events
 
@@ -521,8 +575,29 @@ def publish_perf_artifacts(
     shutil.copytree(perf_output_dir, latest_dir)
 
     for target_dir in (run_dir, latest_dir):
+        target_metadata = dict(metadata)
+
+        if (target_dir / "perf.data").exists():
+            target_metadata["archived_perf_data"] = str(target_dir / "perf.data")
+        if (target_dir / "perf_report.txt").exists():
+            target_metadata["archived_perf_report"] = str(target_dir / "perf_report.txt")
+        if (target_dir / "perf_stat.txt").exists():
+            target_metadata["archived_perf_stat"] = str(target_dir / "perf_stat.txt")
+
+        archived_bench_binary = target_dir / "context" / Path(metadata["archived_bench_binary"]).name
+        if archived_bench_binary.exists():
+            target_metadata["archived_bench_binary"] = str(archived_bench_binary)
+
+        archived_git_commit = target_dir / "context" / "git_commit.txt"
+        if archived_git_commit.exists():
+            target_metadata["archived_git_commit"] = str(archived_git_commit)
+
+        archived_git_status = target_dir / "context" / "git_status.txt"
+        if archived_git_status.exists():
+            target_metadata["archived_git_status"] = str(archived_git_status)
+
         metadata_path = target_dir / "run_metadata.json"
-        metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+        metadata_path.write_text(json.dumps(target_metadata, indent=2) + "\n", encoding="utf-8")
 
     return run_dir, latest_dir
 
