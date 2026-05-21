@@ -59,6 +59,7 @@ RANDOM_LOSS_SCENARIO = "RandomLoss"
 RANDOM_LOSS_RATE_SCENARIO = "RandomLossRate"
 SHUFFLE_SCENARIO = "Shuffle"
 SHUFFLE_FOCUS_IMPLEMENTATIONS = {"quic-go", "s2n-quic"}
+IN_ORDER_FOCUS_IMPLEMENTATIONS = {"lsquic"}
 RANDOM_LOSS_SPLIT_GROUPS = [
     (
         {"quic-go"},
@@ -361,6 +362,36 @@ def scenario_display_title(scenario: str, records: list[BenchmarkRecord]) -> str
 def build_figure_specs(scenario: str, records: list[BenchmarkRecord]) -> list[FigureSpec]:
     default_title = scenario_display_title(scenario, records)
     default_slug = SCENARIO_FILE_SLUGS.get(scenario, slugify(scenario))
+
+    if scenario == "InOrder":
+        focus_records = [
+            record for record in records if record.implementation in IN_ORDER_FOCUS_IMPLEMENTATIONS
+        ]
+        other_records = [
+            record for record in records if record.implementation not in IN_ORDER_FOCUS_IMPLEMENTATIONS
+        ]
+
+        grouped_specs = []
+        if focus_records:
+            grouped_specs.append(
+                FigureSpec(
+                    scenario,
+                    f"{default_title} (lsquic)",
+                    f"{default_slug}_lsquic",
+                    focus_records,
+                )
+            )
+        if other_records:
+            grouped_specs.append(
+                FigureSpec(
+                    scenario,
+                    f"{default_title} (other implementations)",
+                    f"{default_slug}_others",
+                    other_records,
+                )
+            )
+
+        return grouped_specs or [FigureSpec(scenario, default_title, default_slug, records)]
 
     if scenario in {RANDOM_LOSS_SCENARIO, RANDOM_LOSS_RATE_SCENARIO}:
         grouped_specs = []
