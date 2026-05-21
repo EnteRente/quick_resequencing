@@ -35,7 +35,10 @@ const ERROR_RATES: [f64; 11] = [
 ];
 const BENCH_SCHEMES_ENV: &str = "QUICK_RESEQUENCING_SCHEMES";
 const BENCH_IMPLEMENTATIONS_ENV: &str = "QUICK_RESEQUENCING_IMPLEMENTATIONS";
+const BENCH_BURST_SIZES_ENV: &str = "QUICK_RESEQUENCING_BURST_SIZES";
+const BENCH_PACKET_COUNTS_ENV: &str = "QUICK_RESEQUENCING_PACKET_COUNTS";
 
+//TODO: Refactor the selection phase into another module
 struct SchemeSelection {
     in_order: bool,
     first_to_last: bool,
@@ -145,9 +148,9 @@ impl ImplementationSelection {
             match implementation {
                 "all" => return Self::all(),
                 "quiche" => selection.quiche = true,
-                "quic-go" | "quicgo" | "quic_go" => selection.quic_go = true,
+                "quic-go"   | "quicgo"    | "quic_go" => selection.quic_go = true,
                 "linux_tcp" | "linux-tcp" | "tcp" => selection.linux_tcp = true,
-                "s2n-quic" | "s2n_quic" | "s2n" => selection.s2n_quic = true,
+                "s2n-quic"  | "s2n_quic"  | "s2n" => selection.s2n_quic = true,
                 "lsquic" => selection.lsquic = true,
                 other => panic!(
                     "Unknown benchmark implementation in {BENCH_IMPLEMENTATIONS_ENV}: {other}"
@@ -160,13 +163,52 @@ impl ImplementationSelection {
 
     fn includes(&self, implementation: &str) -> bool {
         match implementation {
-            "quiche" => self.quiche,
-            "quic-go" => self.quic_go,
+            "quiche"    => self.quiche,
+            "quic-go"   => self.quic_go,
             "linux_tcp" => self.linux_tcp,
-            "s2n-quic" => self.s2n_quic,
-            "lsquic" => self.lsquic,
-            _ => false,
+            "s2n-quic"  => self.s2n_quic,
+            "lsquic"    => self.lsquic,
+            _           => false,
         }
+    }
+}
+
+fn selected_packet_counts_from_env() -> Vec<usize> {
+    let Ok(value) = env::var(BENCH_BURST_SIZES_ENV).or_else(|_| env::var(BENCH_PACKET_COUNTS_ENV))
+    else {
+        return NUM_OF_PACKETS.to_vec();
+    };
+    if value.trim().is_empty() {
+        return NUM_OF_PACKETS.to_vec();
+    }
+
+    let mut packet_counts = Vec::new();
+    for raw_packet_count in value
+        .split(',')
+        .map(str::trim)
+        .filter(|packet_count| !packet_count.is_empty())
+    {
+        if raw_packet_count.eq_ignore_ascii_case("all") {
+            return NUM_OF_PACKETS.to_vec();
+        }
+
+        let packet_count = raw_packet_count.parse::<usize>().unwrap_or_else(|_| {
+            panic!(
+                "Invalid packet count in {BENCH_BURST_SIZES_ENV}/{BENCH_PACKET_COUNTS_ENV}: {raw_packet_count}"
+            )
+        });
+        if packet_count == 0 {
+            panic!("Packet count in {BENCH_BURST_SIZES_ENV}/{BENCH_PACKET_COUNTS_ENV} must be greater than zero");
+        }
+        if !packet_counts.contains(&packet_count) {
+            packet_counts.push(packet_count);
+        }
+    }
+
+    if packet_counts.is_empty() {
+        NUM_OF_PACKETS.to_vec()
+    } else {
+        packet_counts
     }
 }
 
@@ -209,7 +251,7 @@ fn bench_config(
         bench_id,
         benchmark_data,
         selected_implementations,
-        RecvBuf, //cloudflare quiche
+        RecvBuf,          //cloudflare quiche
         QuicGoFrameSorter,
         TcpOfoQueue,
         Reassembler,      //s2n-quic
@@ -245,8 +287,9 @@ fn bench_main(c: &mut Criterion) {
     let generator_register = GeneratorRegistry::default();
     let selected_schemes = SchemeSelection::from_env();
     let selected_implementations = ImplementationSelection::from_env();
+    let selected_packet_counts = selected_packet_counts_from_env();
 
-    for packet_count in NUM_OF_PACKETS {
+    for packet_count in selected_packet_counts.iter().copied() {
         // Configure settings
         let config = GeneratorConfig::new(PACKET_SIZE, packet_count, Some(SEED));
         group.throughput(Throughput::Elements(packet_count as u64));
@@ -271,7 +314,9 @@ fn bench_main(c: &mut Criterion) {
 
     // TODO: "Hard coded" (i.e. not integrated into incorporated into the code structure as intended)
     // Random Loss 0% up to 10% error rate with 10_000 packets
-    if selected_schemes.includes("RandomLossRate") {
+    if selected_schemes.includes("RandomLossRate")
+        && selected_packet_counts.contains(&RANDOM_LOSS_PACKET_COUNT)
+    {
         group.throughput(Throughput::Elements(RANDOM_LOSS_PACKET_COUNT as u64));
         group.measurement_time(Duration::from_secs_f64(50.0));
 

@@ -54,6 +54,7 @@ RANDOM_LOSS_SCENARIO = "RandomLoss"
 RANDOM_LOSS_RATE_SCENARIO = "RandomLossRate"
 SHUFFLE_SCENARIO = "Shuffle"
 SHUFFLE_FOCUS_IMPLEMENTATIONS = {"quic-go", "s2n-quic"}
+RANDOM_LOSS_FOCUS_IMPLEMENTATIONS = {"quic-go"}
 RANDOM_LOSS_RATE_PATTERN = re.compile(r"^RandomLoss with (?P<percent>\d+(?:\.\d+)?)% loss$")
 SCHEME_ALIASES = {
     RANDOM_LOSS_SCENARIO: RANDOM_LOSS_SCENARIO,
@@ -327,14 +328,30 @@ def build_figure_specs(scenario: str, records: list[BenchmarkRecord]) -> list[Fi
     default_title = scenario_display_title(scenario, records)
     default_slug = SCENARIO_FILE_SLUGS.get(scenario, slugify(scenario))
 
-    if scenario != SHUFFLE_SCENARIO:
+    split_specs = {
+        SHUFFLE_SCENARIO: (
+            SHUFFLE_FOCUS_IMPLEMENTATIONS,
+            "quic-go + s2n-quic",
+            "shuffle_quic_go_s2n_quic",
+            "shuffle_others",
+        ),
+        RANDOM_LOSS_SCENARIO: (
+            RANDOM_LOSS_FOCUS_IMPLEMENTATIONS,
+            "quic-go",
+            "random_loss_quic_go",
+            "random_loss_others",
+        ),
+    }
+    split_spec = split_specs.get(scenario)
+    if split_spec is None:
         return [FigureSpec(scenario, default_title, default_slug, records)]
 
+    focus_implementations, focus_title, focus_slug, other_slug = split_spec
     focus_records = [
-        record for record in records if record.implementation in SHUFFLE_FOCUS_IMPLEMENTATIONS
+        record for record in records if record.implementation in focus_implementations
     ]
     other_records = [
-        record for record in records if record.implementation not in SHUFFLE_FOCUS_IMPLEMENTATIONS
+        record for record in records if record.implementation not in focus_implementations
     ]
 
     if not focus_records or not other_records:
@@ -343,14 +360,14 @@ def build_figure_specs(scenario: str, records: list[BenchmarkRecord]) -> list[Fi
     return [
         FigureSpec(
             scenario,
-            f"{default_title} (quic-go + s2n-quic)",
-            "shuffle_quic_go_s2n_quic",
+            f"{default_title} ({focus_title})",
+            focus_slug,
             focus_records,
         ),
         FigureSpec(
             scenario,
             f"{default_title} (other implementations)",
-            "shuffle_others",
+            other_slug,
             other_records,
         ),
     ]

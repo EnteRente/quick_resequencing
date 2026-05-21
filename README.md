@@ -156,13 +156,28 @@ Run separate measurements for only selected implementations:
 python3 run_benchmark_pipeline.py --perf stat --implementation quiche --implementation quic-go
 ```
 
+Run separate measurements for every implementation, scheme, and burst size:
+
+```bash
+python3 run_benchmark_pipeline.py --perf stat --perf-by-scenario --perf-events cycles,instructions,cache-misses
+```
+
+Restrict the scenario matrix when you do not need the full run:
+
+```bash
+python3 run_benchmark_pipeline.py --perf stat --perf-by-scenario --implementation quiche --scheme RandomLoss --burst-size 10000
+```
+
 When split by implementation, the pipeline sets `QUICK_RESEQUENCING_IMPLEMENTATIONS` so the benchmark harness only registers that implementation. Results are written under implementation-specific folders such as `benchmark_results/perf/latest/quiche/perf_stat.txt` and `benchmark_results/perf/latest/quic-go/perf_stat.txt`.
+
+When split by scenario, the pipeline additionally sets `QUICK_RESEQUENCING_SCHEMES` and `QUICK_RESEQUENCING_BURST_SIZES`. In this benchmark, burst size is the packet-count dimension used in the Criterion IDs. Results are nested by implementation, scheme, and size, for example `benchmark_results/perf/latest/quiche/RandomLoss/packets_10000/perf_stat.txt`. The root `perf_index.json` lists every generated perf artifact.
 
 In `perf` mode the pipeline:
 
 - builds the Criterion bench executable with `cargo bench --bench resequencing_bench --no-run`
 - runs that bench binary directly under `perf`
 - runs one filtered `perf` command per implementation when `--perf-by-implementation` or `--implementation` is used
+- runs one filtered `perf` command per implementation/scheme/size combination when `--perf-by-scenario` is used
 - prefixes only `perf stat`/`perf record` with `sudo` when `--sudo-perf` is set
 - runs the benchmark twice when `--perf both` is used: `stat` first, then `record`
 - still writes Criterion results to `target/criterion`

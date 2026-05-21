@@ -20,10 +20,17 @@ BENCH_RES_DIR_PATH = REPO_ROOT / "benchmark_results"
 FLAKE_FILE_PATH = REPO_ROOT / "flake.nix"
 PLOTTER_FILE_PATH = REPO_ROOT / "box_plotter.py"
 PIPELINE_FILE_PATH = REPO_ROOT / "run_benchmark_pipeline.py"
+
 NIX_DEV_ENV_VAR = "QUICK_RESEQUENCING_NIX_DEV"
 BENCH_SCHEMES_ENV_VAR = "QUICK_RESEQUENCING_SCHEMES"
 BENCH_IMPLEMENTATIONS_ENV_VAR = "QUICK_RESEQUENCING_IMPLEMENTATIONS"
+BENCH_BURST_SIZES_ENV_VAR = "QUICK_RESEQUENCING_BURST_SIZES"
+BENCH_PACKET_COUNTS_ENV_VAR = "QUICK_RESEQUENCING_PACKET_COUNTS"
+
+PACKET_COUNT_ORDER = [100, 1_000, 10_000, 30_000, 60_000, 100_000]
+RANDOM_LOSS_RATE_PACKET_COUNT = 10_000
 SCHEME_ORDER = ["InOrder", "FirstToLast", "Shuffle", "RandomLoss", "RandomLossRate"]
+
 SCHEME_ALIASES = {
     "inorder": "InOrder",
     "in_order": "InOrder",
@@ -126,6 +133,11 @@ def parse_args() -> argparse.Namespace:
         help="Run perf separately for each receive-buffer implementation.",
     )
     parser.add_argument(
+        "--perf-by-scenario",
+        action="store_true",
+        help="Run perf separately for each implementation, scheme, and burst size.",
+    )
+    parser.add_argument(
         "--implementation",
         action="append",
         default=[],
@@ -133,6 +145,17 @@ def parse_args() -> argparse.Namespace:
             "Only run perf for the given implementation. Repeat this option or "
             "use a comma-separated list. Supported values: quiche, quic-go, "
             "linux_tcp, s2n-quic, lsquic."
+        ),
+    )
+    parser.add_argument(
+        "--burst-size",
+        "--packet-count",
+        action="append",
+        default=[],
+        dest="packet_counts",
+        help=(
+            "Only benchmark the given packet count/burst size. Repeat this option "
+            "or use a comma-separated list. Use 'all' for the default full set."
         ),
     )
     parser.add_argument(
@@ -368,10 +391,77 @@ def normalize_selected_implementations(
     return sorted(selected, key=IMPLEMENTATION_ORDER.index)
 
 
-def benchmark_env(selected_schemes: Sequence[str]) -> dict[str, str]:
-    if not selected_schemes:
-        return {}
-    return {BENCH_SCHEMES_ENV_VAR: ",".join(selected_schemes)}
+def normalize_selected_packet_counts(
+    raw_packet_counts: Sequence[str],
+    *,
+    default_to_all: bool,
+) -> list[int]:
+    if not raw_packet_counts:
+        return list(PACKET_COUNT_ORDER) if default_to_all else []
+
+    selected: list[int] = []
+    for raw_value in raw_packet_counts:
+        for raw_packet_count in raw_value.split(","):
+            packet_count_value = raw_packet_count.strip()
+            if not packet_count_value:
+                continue
+
+            if packet_count_value.lower() == "all":
+                return list(PACKET_COUNT_ORDER)
+
+            try:
+                packet_count = int(packet_count_value)
+            except ValueError as error:
+                raise ValueError(f"Invalid packet count '{packet_count_value}'.") from error
+
+            if packet_count <= 0:
+                raise ValueError(f"Packet count must be greater than zero: {packet_count}")
+
+            if packet_count not in selected:
+                selected.append(packet_count)
+
+    if not selected and default_to_all:
+        return list(PACKET_COUNT_ORDER)
+
+    return sorted(
+        selected,
+        key=lambda packet_count: (
+            PACKET_COUNT_ORDER.index(packet_count)
+            if packet_count in PACKET_COUNT_ORDER
+            else len(PACKET_COUNT_ORDER),
+            packet_count,
+        ),
+    )
+
+
+def selected_or_default_schemes(selected_schemes: Sequence[str]) -> list[str]:
+    return list(selected_schemes) if selected_schemes else list(SCHEME_ORDER)
+
+
+def selected_or_default_packet_counts(selected_packet_counts: Sequence[int]) -> list[int]:
+    return list(selected_packet_counts) if selected_packet_counts else list(PACKET_COUNT_ORDER)
+
+
+def packet_counts_for_scheme(scheme: str, packet_counts: Sequence[int]) -> list[int]:
+    if scheme == "RandomLossRate":
+        return [RANDOM_LOSS_RATE_PACKET_COUNT] if RANDOM_LOSS_RATE_PACKET_COUNT in packet_counts else []
+    return list(packet_counts)
+
+
+def benchmark_env(
+    selected_schemes: Sequence[str],
+    selected_implementations: Sequence[str] = (),
+    selected_packet_counts: Sequence[int] = (),
+) -> dict[str, str]:
+    env: dict[str, str] = {}
+    if selected_schemes:
+        env[BENCH_SCHEMES_ENV_VAR] = ",".join(selected_schemes)
+    if selected_implementations:
+        env[BENCH_IMPLEMENTATIONS_ENV_VAR] = ",".join(selected_implementations)
+    if selected_packet_counts:
+        env[BENCH_BURST_SIZES_ENV_VAR] = ",".join(str(count) for count in selected_packet_counts)
+        env[BENCH_PACKET_COUNTS_ENV_VAR] = ",".join(str(count) for count in selected_packet_counts)
+    return env
 
 
 def split_perf_event_list(raw_value: str) -> list[str]:
@@ -689,6 +779,120 @@ def run_perf_benchmarks_by_implementation(
     return metadata
 
 
+def run_perf_benchmarks_by_scenario(
+    bench_name: str,
+    perf_mode: str,
+    perf_events: Sequence[str],
+    perf_output_dir: Path,
+    env: dict[str, str],
+    sudo_perf: bool,
+    implementations: Sequence[str],
+    schemes: Sequence[str],
+    packet_counts: Sequence[int],
+) -> dict[str, str]:
+    bench_binary = build_bench_binary(bench_name)
+    clean_directory(perf_output_dir)
+
+    metadata = {
+        "bench_binary": str(bench_binary),
+        "perf_mode": perf_mode,
+        "sudo_perf": str(sudo_perf),
+        "perf_by_scenario": "true",
+        "perf_implementations": ",".join(implementations),
+        "perf_schemes": ",".join(schemes),
+        "perf_packet_counts": ",".join(str(count) for count in packet_counts),
+    }
+    metadata.update(archive_perf_context(perf_output_dir, bench_binary))
+    if perf_events:
+        metadata["perf_events"] = ",".join(perf_events)
+
+    index_entries: list[dict[str, str]] = []
+    for implementation in implementations:
+        for scheme in schemes:
+            for packet_count in packet_counts_for_scheme(scheme, packet_counts):
+                relative_dir = (
+                    Path(safe_path_component(implementation))
+                    / safe_path_component(scheme)
+                    / f"packets_{packet_count}"
+                )
+                scenario_dir = perf_output_dir / relative_dir
+                scenario_dir.mkdir(parents=True, exist_ok=True)
+
+                scenario_env = dict(env)
+                scenario_env[BENCH_IMPLEMENTATIONS_ENV_VAR] = implementation
+                scenario_env[BENCH_SCHEMES_ENV_VAR] = scheme
+                scenario_env[BENCH_BURST_SIZES_ENV_VAR] = str(packet_count)
+                scenario_env[BENCH_PACKET_COUNTS_ENV_VAR] = str(packet_count)
+                bench_args = [implementation]
+
+                scenario_metadata = dict(metadata)
+                scenario_metadata.update(
+                    {
+                        "implementation": implementation,
+                        "scheme": scheme,
+                        "packet_count": str(packet_count),
+                        "criterion_filter": implementation,
+                        "perf_output_dir": str(scenario_dir),
+                    }
+                )
+
+                if perf_mode in {"stat", "both"}:
+                    scenario_metadata.update(
+                        run_perf_stat(
+                            bench_binary,
+                            perf_events,
+                            scenario_dir,
+                            scenario_env,
+                            sudo_perf,
+                            bench_args,
+                        )
+                    )
+
+                if perf_mode in {"record", "both"}:
+                    scenario_metadata.update(
+                        run_perf_record(
+                            bench_binary,
+                            perf_events,
+                            scenario_dir,
+                            scenario_env,
+                            sudo_perf,
+                            bench_args,
+                        )
+                    )
+
+                metadata_path = scenario_dir / "run_metadata.json"
+                metadata_path.write_text(
+                    json.dumps(scenario_metadata, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+
+                index_entry = {
+                    "implementation": implementation,
+                    "scheme": scheme,
+                    "packet_count": str(packet_count),
+                    "result_dir": os.fspath(relative_dir),
+                }
+                if perf_mode in {"stat", "both"}:
+                    index_entry["perf_stat_path"] = os.fspath(relative_dir / "perf_stat.txt")
+                if perf_mode in {"record", "both"}:
+                    index_entry["perf_data_path"] = os.fspath(relative_dir / "perf.data")
+                    index_entry["perf_report_path"] = os.fspath(relative_dir / "perf_report.txt")
+                index_entries.append(index_entry)
+
+    if not index_entries:
+        raise RuntimeError(
+            "No perf scenarios were selected. Check --scheme and --burst-size filters."
+        )
+
+    (perf_output_dir / "perf_index.json").write_text(
+        json.dumps(index_entries, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    metadata["scenario_count"] = str(len(index_entries))
+    metadata["archived_perf_index"] = "perf_index.json"
+    return metadata
+
+
 def run_plotter(
     python_executable: Path,
     criterion_root: Path,
@@ -809,16 +1013,24 @@ def main() -> int:
     publish_dir = resolve_repo_path(args.publish_dir)
     python_executable = Path(sys.executable).resolve()
     selected_schemes = normalize_selected_schemes(args.scheme)
-    selected_benchmark_env = benchmark_env(selected_schemes)
     perf_events = normalize_perf_events(args.perf_events)
     selected_implementations = normalize_selected_implementations(
         args.implementation,
-        default_to_all=args.perf_by_implementation,
+        default_to_all=args.perf_by_implementation or args.perf_by_scenario,
+    )
+    selected_packet_counts = normalize_selected_packet_counts(
+        args.packet_counts,
+        default_to_all=args.perf_by_scenario,
+    )
+    selected_benchmark_env = benchmark_env(
+        selected_schemes,
+        selected_implementations if not args.perf_by_scenario else [],
+        selected_packet_counts if not args.perf_by_scenario else [],
     )
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    if args.perf == "none" and (args.perf_by_implementation or selected_implementations):
-        raise RuntimeError("--perf-by-implementation/--implementation requires --perf stat, record, or both.")
+    if args.perf == "none" and (args.perf_by_implementation or args.perf_by_scenario):
+        raise RuntimeError("--perf-by-implementation/--perf-by-scenario requires --perf stat, record, or both.")
 
     python_version = verify_python_version()
     verify_python_dependencies(skip_plot=args.skip_plot)
@@ -836,6 +1048,18 @@ def main() -> int:
     if not args.skip_bench:
         if args.perf == "none":
             run_benchmark(args.bench_name, selected_benchmark_env)
+        elif args.perf_by_scenario:
+            perf_metadata = run_perf_benchmarks_by_scenario(
+                args.bench_name,
+                args.perf,
+                perf_events,
+                perf_output_dir,
+                benchmark_env(()),
+                args.sudo_perf,
+                selected_implementations,
+                selected_or_default_schemes(selected_schemes),
+                selected_or_default_packet_counts(selected_packet_counts),
+            )
         elif args.perf_by_implementation or selected_implementations:
             perf_metadata = run_perf_benchmarks_by_implementation(
                 args.bench_name,
@@ -878,9 +1102,15 @@ def main() -> int:
         "selected_implementations": (
             ",".join(selected_implementations) if selected_implementations else "aggregate"
         ),
+        "selected_packet_counts": (
+            ",".join(str(count) for count in selected_packet_counts)
+            if selected_packet_counts
+            else "all"
+        ),
         "criterion_root": str(criterion_root),
         "plot_output_dir": str(plot_output_dir),
         "plot_count": str(len(plots)),
+        "plot_files": ",".join(plot.name for plot in plots),
         "perf_mode": args.perf,
     }
     metadata.update(perf_metadata)
