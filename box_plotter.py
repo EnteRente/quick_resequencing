@@ -35,9 +35,14 @@ from matplotlib.ticker import EngFormatter, MaxNLocator
 
 IMPLEMENTATION_NAMES = {
     "linux_tcp": "linux_tcp",
+    "linux-tcp": "linux_tcp",
+    "tcp": "linux_tcp",
     "quicgo": "quic-go",
+    "quic_go": "quic-go",
     "quic-go": "quic-go",
     "quiche": "quiche",
+    "s2n": "s2n-quic",
+    "s2n_quic": "s2n-quic",
     "s2n-quic": "s2n-quic",
     "lsquic": "lsquic",
 }
@@ -54,7 +59,23 @@ RANDOM_LOSS_SCENARIO = "RandomLoss"
 RANDOM_LOSS_RATE_SCENARIO = "RandomLossRate"
 SHUFFLE_SCENARIO = "Shuffle"
 SHUFFLE_FOCUS_IMPLEMENTATIONS = {"quic-go", "s2n-quic"}
-RANDOM_LOSS_FOCUS_IMPLEMENTATIONS = {"quic-go"}
+RANDOM_LOSS_SPLIT_GROUPS = [
+    (
+        {"quic-go"},
+        "quic-go",
+        "quic_go",
+    ),
+    (
+        {"lsquic", "quiche"},
+        "lsquic + quiche",
+        "lsquic_quiche",
+    ),
+    (
+        {"s2n-quic", "linux_tcp"},
+        "s2n-quic + Linux TCP",
+        "s2n_quic_linux_tcp",
+    ),
+]
 RANDOM_LOSS_RATE_PATTERN = re.compile(r"^RandomLoss with (?P<percent>\d+(?:\.\d+)?)% loss$")
 SCHEME_ALIASES = {
     RANDOM_LOSS_SCENARIO: RANDOM_LOSS_SCENARIO,
@@ -154,6 +175,12 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="Only include the given scheme/case. Repeat to select more than one.",
     )
+    parser.add_argument(
+        "--implementation",
+        action="append",
+        default=[],
+        help="Only include the given implementation. Repeat to select more than one.",
+    )
 
     # Option to filter packet burst sizes
     parser.add_argument(
@@ -214,6 +241,10 @@ def normalize_selected_schemes(schemes: Iterable[str]) -> set[str]:
     return {SCHEME_ALIASES.get(scheme, scheme) for scheme in schemes}
 
 
+def normalize_selected_implementations(implementations: Iterable[str]) -> set[str]:
+    return {normalize_implementation(implementation) for implementation in implementations}
+
+
 def select_benchmark_runs(root: Path) -> Iterable[tuple[Path, Path]]:
     selected: dict[Path, tuple[int, Path, Path]] = {}
     priority = {"new": 0, "base": 1}
@@ -241,6 +272,7 @@ def collect_records(
     root: Path,
     selected_group: str,
     selected_schemes: set[str],
+    selected_implementations: set[str],
     selected_packet_counts: set[int],
 ) -> list[BenchmarkRecord]:
     records: list[BenchmarkRecord] = []
@@ -257,6 +289,8 @@ def collect_records(
         implementation = normalize_implementation(benchmark["function_id"])
         scenario, size, size_label, x_value, x_label = parse_value_str(benchmark["value_str"])
         if scenario not in ALLOWED_SCENARIOS:
+            continue
+        if selected_implementations and implementation not in selected_implementations:
             continue
         if size in EXCLUDED_PACKET_COUNTS:
             continue
@@ -328,30 +362,32 @@ def build_figure_specs(scenario: str, records: list[BenchmarkRecord]) -> list[Fi
     default_title = scenario_display_title(scenario, records)
     default_slug = SCENARIO_FILE_SLUGS.get(scenario, slugify(scenario))
 
-    split_specs = {
-        SHUFFLE_SCENARIO: (
-            SHUFFLE_FOCUS_IMPLEMENTATIONS,
-            "quic-go + s2n-quic",
-            "shuffle_quic_go_s2n_quic",
-            "shuffle_others",
-        ),
-        RANDOM_LOSS_SCENARIO: (
-            RANDOM_LOSS_FOCUS_IMPLEMENTATIONS,
-            "quic-go",
-            "random_loss_quic_go",
-            "random_loss_others",
-        ),
-    }
-    split_spec = split_specs.get(scenario)
-    if split_spec is None:
+    if scenario in {RANDOM_LOSS_SCENARIO, RANDOM_LOSS_RATE_SCENARIO}:
+        grouped_specs = []
+        for implementations, group_title, group_slug in RANDOM_LOSS_SPLIT_GROUPS:
+            group_records = [
+                record for record in records if record.implementation in implementations
+            ]
+            if group_records:
+                grouped_specs.append(
+                    FigureSpec(
+                        scenario,
+                        f"{default_title} ({group_title})",
+                        f"{default_slug}_{group_slug}",
+                        group_records,
+                    )
+                )
+
+        return grouped_specs or [FigureSpec(scenario, default_title, default_slug, records)]
+
+    if scenario != SHUFFLE_SCENARIO:
         return [FigureSpec(scenario, default_title, default_slug, records)]
 
-    focus_implementations, focus_title, focus_slug, other_slug = split_spec
     focus_records = [
-        record for record in records if record.implementation in focus_implementations
+        record for record in records if record.implementation in SHUFFLE_FOCUS_IMPLEMENTATIONS
     ]
     other_records = [
-        record for record in records if record.implementation not in focus_implementations
+        record for record in records if record.implementation not in SHUFFLE_FOCUS_IMPLEMENTATIONS
     ]
 
     if not focus_records or not other_records:
@@ -360,14 +396,14 @@ def build_figure_specs(scenario: str, records: list[BenchmarkRecord]) -> list[Fi
     return [
         FigureSpec(
             scenario,
-            f"{default_title} ({focus_title})",
-            focus_slug,
+            f"{default_title} (quic-go + s2n-quic)",
+            "shuffle_quic_go_s2n_quic",
             focus_records,
         ),
         FigureSpec(
             scenario,
             f"{default_title} (other implementations)",
-            other_slug,
+            "shuffle_others",
             other_records,
         ),
     ]
@@ -589,6 +625,7 @@ def main() -> int:
         if args.scheme
         else set(ALLOWED_SCENARIOS)
     )
+    selected_implementations = normalize_selected_implementations(args.implementation)
     packet_counts = {
         int(packet_count)
         for packet_count in args.packet_count
@@ -598,6 +635,7 @@ def main() -> int:
         criterion_root,
         args.group,
         selected_schemes,
+        selected_implementations,
         packet_counts,
     )
     if not records:
