@@ -507,7 +507,7 @@ def plot_scenario_series(
 
             position = x_value + offset_factor * cluster_gap * 0.06
             positions.append(position)
-            widths.append(cluster_gap * 0.04)
+            widths.append(cluster_gap * 0.055)
             datasets.append(samples)
             trend_x.append(x_value)
             trend_y.append(median(samples))
@@ -527,12 +527,13 @@ def plot_scenario_series(
             boxprops={
                 "facecolor": color,
                 "edgecolor": "#1F1F1F",
-                "linewidth": 0.9,
-                "alpha": 0.8,
+                "linewidth": 1.15,
+                "alpha": 0.95,
+                "zorder": 3,
             },
-            whiskerprops={"color": "#1F1F1F", "linewidth": 0.9},
-            capprops={"color": "#1F1F1F", "linewidth": 0.9},
-            medianprops={"color": "#F7F7F7", "linewidth": 1.6},
+            whiskerprops={"color": "#1F1F1F", "linewidth": 1.15, "zorder": 3},
+            capprops={"color": "#1F1F1F", "linewidth": 1.15, "zorder": 3},
+            medianprops={"color": "#F7F7F7", "linewidth": 2.0, "zorder": 4},
         )
         ax.plot(
             trend_x,
@@ -540,8 +541,8 @@ def plot_scenario_series(
             linestyle="--",
             linewidth=0.8,
             color=color,
-            alpha=0.8,
-            zorder=3,
+            alpha=0.55,
+            zorder=1,
         )
 
 
