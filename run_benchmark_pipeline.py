@@ -83,7 +83,7 @@ def parse_args() -> argparse.Namespace:
         "--plot-output-dir",
         type=Path,
         default=Path("target/criterion_packet_boxplots"),
-        help=f"Intermediate directory where {PLOTTER_FILE_PATH} writes the plot PNG files.",
+        help=f"Intermediate directory where {PLOTTER_FILE_PATH} writes the plot PDF files.",
     )
     parser.add_argument(
         "--publish-dir",
@@ -953,9 +953,9 @@ def collect_plot_files(plot_output_dir: Path) -> list[Path]:
     if not plot_output_dir.exists():
         raise FileNotFoundError(f"Plot output directory not found: {plot_output_dir}")
 
-    plots = sorted(plot_output_dir.glob("*.png"))
+    plots = sorted(plot_output_dir.glob("*.pdf"))
     if not plots:
-        raise RuntimeError(f"No plot PNG files found in {plot_output_dir}")
+        raise RuntimeError(f"No plot PDF files found in {plot_output_dir}")
     return plots
 
 

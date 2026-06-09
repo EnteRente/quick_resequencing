@@ -154,7 +154,7 @@ def parse_args() -> argparse.Namespace:
         help="Path to the Criterion output directory.",
     )
 
-    # Where the pngs are written to
+    # Where the PDFs are written to
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -702,7 +702,7 @@ def main() -> int:
                 figure_spec.records,
                 title=figure_spec.title,
             )
-            output_path = output_dir / f"scenario_{figure_spec.file_slug}.png"
+            output_path = output_dir / f"scenario_{figure_spec.file_slug}.pdf"
             figure.savefig(output_path, dpi=args.dpi, bbox_inches="tight")
             plt.close(figure)
             print(f"Wrote boxplot to {output_path}")
