@@ -362,6 +362,12 @@ def scenario_display_title(scenario: str, records: list[BenchmarkRecord]) -> str
 def build_figure_specs(scenario: str, records: list[BenchmarkRecord]) -> list[FigureSpec]:
     default_title = scenario_display_title(scenario, records)
     default_slug = SCENARIO_FILE_SLUGS.get(scenario, slugify(scenario))
+    overall_spec = FigureSpec(
+        scenario,
+        f"{default_title} (all implementations)",
+        default_slug,
+        records,
+    )
 
     if scenario == "InOrder":
         focus_records = [
@@ -391,7 +397,10 @@ def build_figure_specs(scenario: str, records: list[BenchmarkRecord]) -> list[Fi
                 )
             )
 
-        return grouped_specs or [FigureSpec(scenario, default_title, default_slug, records)]
+        grouped_specs = [
+            figure_spec for figure_spec in grouped_specs if len(figure_spec.records) < len(records)
+        ]
+        return [overall_spec, *grouped_specs]
 
     if scenario in {RANDOM_LOSS_SCENARIO, RANDOM_LOSS_RATE_SCENARIO}:
         grouped_specs = []
@@ -409,7 +418,10 @@ def build_figure_specs(scenario: str, records: list[BenchmarkRecord]) -> list[Fi
                     )
                 )
 
-        return grouped_specs or [FigureSpec(scenario, default_title, default_slug, records)]
+        grouped_specs = [
+            figure_spec for figure_spec in grouped_specs if len(figure_spec.records) < len(records)
+        ]
+        return [overall_spec, *grouped_specs]
 
     if scenario != SHUFFLE_SCENARIO:
         return [FigureSpec(scenario, default_title, default_slug, records)]
@@ -422,9 +434,10 @@ def build_figure_specs(scenario: str, records: list[BenchmarkRecord]) -> list[Fi
     ]
 
     if not focus_records or not other_records:
-        return [FigureSpec(scenario, default_title, default_slug, records)]
+        return [overall_spec]
 
     return [
+        overall_spec,
         FigureSpec(
             scenario,
             f"{default_title} (quic-go + s2n-quic)",
@@ -525,9 +538,9 @@ def plot_scenario_series(
             trend_x,
             trend_y,
             linestyle="--",
-            linewidth=1.5,
+            linewidth=0.8,
             color=color,
-            alpha=0.95,
+            alpha=0.8,
             zorder=3,
         )
 
@@ -548,7 +561,7 @@ def draw_rotated_x_labels(
             rotation_mode="default",
             ha="center",
             va="top",
-            fontsize=6.5,
+            fontsize=9.5,
             clip_on=False,
             annotation_clip=False,
         )
@@ -591,7 +604,7 @@ def create_scenario_figure(
     ax.set_xscale("linear")
     ax.set_xticks(x_values)
     if scenario_uses_loss_rate_axis(scenario):
-        ax.set_xticklabels([x_labels[x_value] for x_value in x_values], fontsize=9)
+        ax.set_xticklabels([x_labels[x_value] for x_value in x_values], fontsize=11)
     else:
         ax.set_xticklabels([])
         draw_rotated_x_labels(ax, x_values, x_labels)
@@ -614,7 +627,7 @@ def create_scenario_figure(
             [0],
             color=IMPLEMENTATION_COLORS.get(implementation, "#8D99AE"),
             linestyle="--",
-            linewidth=1.5,
+            linewidth=0.8,
             marker="s",
             markersize=8,
             markerfacecolor=IMPLEMENTATION_COLORS.get(implementation, "#8D99AE"),
@@ -626,7 +639,7 @@ def create_scenario_figure(
     fig.legend(
         handles=legend_handles,
         loc="upper center",
-        bbox_to_anchor=(0.56, 0.965),
+        bbox_to_anchor=(0.56, 0.905),
         frameon=False,
         ncol=len(legend_handles),
         columnspacing=1.4,
@@ -635,7 +648,7 @@ def create_scenario_figure(
 
     fig.suptitle(title or scenario_display_title(scenario, records), fontsize=15, x=0.12, y=0.985, ha="left")
     fig.text(0.12, 0.945, group, fontsize=9, color="#5C5C5C", ha="left")
-    fig.tight_layout(rect=(0.06, 0.16, 0.99, 0.88))
+    fig.tight_layout(rect=(0.06, 0.18, 0.99, 0.84))
     return fig
 
 

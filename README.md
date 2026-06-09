@@ -213,15 +213,15 @@ python3 run_benchmark_pipeline.py --no-nix
 
 ## Plot Generation Notes
 
-The plotter reads Criterion JSON files from `target/criterion` and writes one PNG per scenario.
+The plotter reads Criterion JSON files from `target/criterion` and writes one or more PNGs per scenario.
 
 The current `box_plotter.py` supports:
 
-- packet-burst-size plots for `InOrder`
+- packet-burst-size plots for `InOrder`, including an all-implementation overview plus split views
 - packet-burst-size plots for `FirstToLast`
-- split packet-burst-size plots for `Shuffle`: one for `quic-go + s2n-quic`, one for the other implementations
-- packet-burst-size plots for `RandomLoss`
-- a dedicated random-loss-rate plot where loss rates from `0%` to `10%` are compared
+- packet-burst-size plots for `Shuffle`, including an all-implementation overview plus split views
+- packet-burst-size plots for `RandomLoss`, including an all-implementation overview plus split views
+- a dedicated random-loss-rate plot where loss rates from `0%` to `10%` are compared, including an all-implementation overview plus split views
 
 The y-axis is linear and the plotted values are time per packet.
 
