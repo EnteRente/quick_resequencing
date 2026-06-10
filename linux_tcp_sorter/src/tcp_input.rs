@@ -8,10 +8,15 @@
 ///
 /// It does not model sk_receive_queue. Instead, it tracks when contiguous data
 /// becomes readable via `rcv_nxt` / `copied_seq`.
-
 use intrusive_collections::Bound::Included;
-use intrusive_collections::{KeyAdapter, RBTree, RBTreeLink, intrusive_adapter};
+use intrusive_collections::{intrusive_adapter, KeyAdapter, RBTree, RBTreeLink};
 use std::{fmt, ptr::NonNull};
+
+/// Linux defaults this to CONFIG_MAX_SKB_FRAGS, commonly 17.
+///
+/// The benchmark does not model actual skb memory layout, so each synthetic
+/// data packet is treated as one skb fragment for receive-side coalescing.
+const MAX_SKB_FRAGS: usize = 17;
 
 /// Minimal skb model for resequencing behavior.
 ///
@@ -23,19 +28,19 @@ pub struct SkBuffNode {
     /// Exclusive end sequence. Includes FIN sequence space when `fin` is set.
     pub end_seq: u32,
     pub fin: bool,
+    frag_count: usize,
 }
 
 impl SkBuffNode {
     pub fn new(seq: u32, len_bytes: u32, fin: bool) -> Box<Self> {
-        let end_seq = seq
-            .wrapping_add(len_bytes)
-            .wrapping_add(u32::from(fin));
+        let end_seq = seq.wrapping_add(len_bytes).wrapping_add(u32::from(fin));
 
         Box::new(Self {
             link: RBTreeLink::new(),
             seq,
             end_seq,
             fin,
+            frag_count: usize::from(len_bytes > 0),
         })
     }
 
@@ -70,7 +75,6 @@ pub struct TcpOfoQueue {
 
     ooo_bytes: usize,
     ooo_segments: usize,
-
 }
 
 impl TcpOfoQueue {
@@ -206,7 +210,11 @@ impl TcpOfoQueue {
 
             // Typical case
             if skb.seq == last.end_seq {
-                self.coalesce_with_ptr(last_ptr, skb);
+                if Self::can_coalesce(last, &skb) {
+                    self.coalesce_with_ptr(last_ptr, skb);
+                } else {
+                    self.insert_ofo_after(last_ptr, skb);
+                }
                 return true;
             }
 
@@ -243,13 +251,21 @@ impl TcpOfoQueue {
                     return false;
                 }
 
-                let current_ptr = self.coalesce_with_ptr(prev_ptr, skb);
+                let current_ptr = if Self::can_coalesce(unsafe { prev_ptr.as_ref() }, &skb) {
+                    self.coalesce_with_ptr(prev_ptr, skb)
+                } else {
+                    self.insert_ofo_after(prev_ptr, skb)
+                };
                 self.merge_right_from(current_ptr);
                 return true;
             }
 
             if skb.seq == prev_end {
-                let current_ptr = self.coalesce_with_ptr(prev_ptr, skb);
+                let current_ptr = if Self::can_coalesce(unsafe { prev_ptr.as_ref() }, &skb) {
+                    self.coalesce_with_ptr(prev_ptr, skb)
+                } else {
+                    self.insert_ofo_after(prev_ptr, skb)
+                };
                 self.merge_right_from(current_ptr);
                 return true;
             }
@@ -258,6 +274,11 @@ impl TcpOfoQueue {
         let current_ptr = self.insert_ofo(skb);
         self.merge_right_from(current_ptr);
         true
+    }
+
+    #[inline]
+    fn can_coalesce(prev: &SkBuffNode, skb: &SkBuffNode) -> bool {
+        prev.end_seq == skb.seq && prev.frag_count + skb.frag_count <= MAX_SKB_FRAGS
     }
 
     fn coalesce_with_ptr(
@@ -272,9 +293,11 @@ impl TcpOfoQueue {
         let prev = unsafe { prev_ptr.as_mut() };
 
         debug_assert_eq!(prev.end_seq, skb.seq);
+        debug_assert!(Self::can_coalesce(prev, &skb));
 
         prev.end_seq = end_seq;
         prev.fin |= fin;
+        prev.frag_count += skb.frag_count;
         self.ooo_bytes += added_bytes;
 
         prev_ptr
@@ -310,7 +333,8 @@ impl TcpOfoQueue {
         self.ooo_segments += 1;
 
         let mut cursor = unsafe {
-            self.out_of_order_queue.cursor_mut_from_ptr(after_ptr.as_ptr())
+            self.out_of_order_queue
+                .cursor_mut_from_ptr(after_ptr.as_ptr())
         };
         cursor.insert_after(skb);
 
@@ -330,10 +354,10 @@ impl TcpOfoQueue {
         let new_len = skb.len_bytes();
 
         let removed = {
-            let mut cursor =
-                unsafe {
-                    self.out_of_order_queue.cursor_mut_from_ptr(current_ptr.as_ptr())
-                };
+            let mut cursor = unsafe {
+                self.out_of_order_queue
+                    .cursor_mut_from_ptr(current_ptr.as_ptr())
+            };
             cursor.replace_with(skb).ok()?
         };
 
@@ -350,15 +374,17 @@ impl TcpOfoQueue {
     }
 
     fn remove_ofo_by_seq(&mut self, seq: u32) -> Option<Box<SkBuffNode>> {
-        let ptr = self.out_of_order_queue.find(&seq).get().map(NonNull::from)?;
+        let ptr = self
+            .out_of_order_queue
+            .find(&seq)
+            .get()
+            .map(NonNull::from)?;
         self.remove_ofo_by_ptr(ptr)
     }
 
     fn remove_ofo_by_ptr(&mut self, ptr: NonNull<SkBuffNode>) -> Option<Box<SkBuffNode>> {
         let removed = {
-            let mut cursor = unsafe {
-                self.out_of_order_queue.cursor_mut_from_ptr(ptr.as_ptr())
-            };
+            let mut cursor = unsafe { self.out_of_order_queue.cursor_mut_from_ptr(ptr.as_ptr()) };
             cursor.remove()
         }?;
 
@@ -377,7 +403,8 @@ impl TcpOfoQueue {
             let current_end = unsafe { current_ptr.as_ref().end_seq };
             let next = {
                 let cursor = unsafe {
-                    self.out_of_order_queue.cursor_from_ptr(current_ptr.as_ptr())
+                    self.out_of_order_queue
+                        .cursor_from_ptr(current_ptr.as_ptr())
                 };
                 cursor
                     .peek_next()
@@ -421,10 +448,7 @@ impl fmt::Display for TcpOfoQueue {
         write!(
             f,
             "ofo_segments={} ofo_bytes={} rcv_nxt={} copied_seq={}",
-            self.ooo_segments,
-            self.ooo_bytes,
-            self.rcv_nxt,
-            self.copied_seq
+            self.ooo_segments, self.ooo_bytes, self.rcv_nxt, self.copied_seq
         )
     }
 }
@@ -441,7 +465,7 @@ fn after(seq1: u32, seq2: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::TcpOfoQueue;
+    use super::{TcpOfoQueue, MAX_SKB_FRAGS};
 
     #[test]
     fn in_order_insert_flushes_ofo_queue() {
@@ -464,6 +488,60 @@ mod tests {
         assert!(q.insert_len(100, 100, false));
         assert!(!q.insert_len(120, 20, false));
         assert_eq!(q.ooo_segments(), 1);
+    }
+
+    #[test]
+    fn tail_coalescing_stops_at_linux_fragment_cap() {
+        let mut q = TcpOfoQueue::new(0);
+        let packet_len = 100;
+
+        for i in 1..=MAX_SKB_FRAGS as u32 {
+            assert!(q.insert_len(i * packet_len, packet_len, false));
+        }
+
+        assert_eq!(q.ooo_segments(), 1);
+        let first = q
+            .out_of_order_queue
+            .front()
+            .get()
+            .expect("queue has one coalesced segment");
+        assert_eq!(first.seq, packet_len);
+        assert_eq!(first.end_seq, (MAX_SKB_FRAGS as u32 + 1) * packet_len);
+        assert_eq!(first.frag_count, MAX_SKB_FRAGS);
+
+        assert!(q.insert_len((MAX_SKB_FRAGS as u32 + 1) * packet_len, packet_len, false));
+
+        assert_eq!(q.ooo_segments(), 2);
+        let mut cursor = q.out_of_order_queue.front();
+        let first = cursor.get().expect("first segment");
+        let first_end = first.end_seq;
+        cursor.move_next();
+        let second = cursor.get().expect("second segment");
+        assert_eq!(second.seq, first_end);
+        assert_eq!(second.frag_count, 1);
+    }
+
+    #[test]
+    fn predecessor_coalescing_stops_at_linux_fragment_cap() {
+        let mut q = TcpOfoQueue::new(0);
+        let packet_len = 100;
+
+        for i in 1..=MAX_SKB_FRAGS as u32 {
+            assert!(q.insert_len(i * packet_len, packet_len, false));
+        }
+        assert!(q.insert_len(3_000, packet_len, false));
+
+        assert_eq!(q.ooo_segments(), 2);
+        assert!(q.insert_len((MAX_SKB_FRAGS as u32 + 1) * packet_len, packet_len, false));
+
+        assert_eq!(q.ooo_segments(), 3);
+        let mut cursor = q.out_of_order_queue.front();
+        let first = cursor.get().expect("first segment");
+        assert_eq!(first.frag_count, MAX_SKB_FRAGS);
+        cursor.move_next();
+        let second = cursor.get().expect("second segment");
+        assert_eq!(second.seq, first.end_seq);
+        assert_eq!(second.frag_count, 1);
     }
 
     #[test]
