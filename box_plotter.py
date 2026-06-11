@@ -527,13 +527,13 @@ def plot_scenario_series(
             boxprops={
                 "facecolor": color,
                 "edgecolor": "#1F1F1F",
-                "linewidth": 1.15,
+                "linewidth": 1.8,
                 "alpha": 0.95,
                 "zorder": 3,
             },
-            whiskerprops={"color": "#1F1F1F", "linewidth": 1.15, "zorder": 3},
-            capprops={"color": "#1F1F1F", "linewidth": 1.15, "zorder": 3},
-            medianprops={"color": "#F7F7F7", "linewidth": 2.0, "zorder": 4},
+            whiskerprops={"color": "#1F1F1F", "linewidth": 1.8, "zorder": 3},
+            capprops={"color": "#1F1F1F", "linewidth": 1.8, "zorder": 3},
+            medianprops={"color": "#F7F7F7", "linewidth": 2.4, "zorder": 4},
         )
         ax.plot(
             trend_x,
