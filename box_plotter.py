@@ -48,6 +48,7 @@ IMPLEMENTATION_NAMES = {
 }
 
 IMPLEMENTATION_ORDER = ["linux_tcp", "quic-go", "quiche", "s2n-quic", "lsquic"]
+PLOT_EXCLUDED_IMPLEMENTATIONS = {"lsquic"}
 IMPLEMENTATION_COLORS = {
     "linux_tcp": "#355070",
     "quic-go": "#ffbf00",
@@ -288,6 +289,8 @@ def collect_records(
             continue
 
         implementation = normalize_implementation(benchmark["function_id"])
+        if implementation in PLOT_EXCLUDED_IMPLEMENTATIONS:
+            continue
         scenario, size, size_label, x_value, x_label = parse_value_str(benchmark["value_str"])
         if scenario not in ALLOWED_SCENARIOS:
             continue
@@ -334,6 +337,21 @@ def implementation_sort_key(name: str) -> tuple[int, str]:
     if name in IMPLEMENTATION_ORDER:
         return (IMPLEMENTATION_ORDER.index(name), name)
     return (len(IMPLEMENTATION_ORDER), name)
+
+
+def implementation_group_title(implementations: Iterable[str]) -> str:
+    labels = {"linux_tcp": "Linux TCP"}
+    return " + ".join(
+        labels.get(implementation, implementation)
+        for implementation in sorted(implementations, key=implementation_sort_key)
+    )
+
+
+def implementation_group_slug(implementations: Iterable[str]) -> str:
+    return "_".join(
+        slugify(implementation)
+        for implementation in sorted(implementations, key=implementation_sort_key)
+    )
 
 
 def scenario_sort_key(name: str) -> tuple[int, str]:
@@ -404,16 +422,19 @@ def build_figure_specs(scenario: str, records: list[BenchmarkRecord]) -> list[Fi
 
     if scenario in {RANDOM_LOSS_SCENARIO, RANDOM_LOSS_RATE_SCENARIO}:
         grouped_specs = []
-        for implementations, group_title, group_slug in RANDOM_LOSS_SPLIT_GROUPS:
+        for implementations, _, _ in RANDOM_LOSS_SPLIT_GROUPS:
             group_records = [
                 record for record in records if record.implementation in implementations
             ]
             if group_records:
+                group_implementations = {
+                    record.implementation for record in group_records
+                }
                 grouped_specs.append(
                     FigureSpec(
                         scenario,
-                        f"{default_title} ({group_title})",
-                        f"{default_slug}_{group_slug}",
+                        f"{default_title} ({implementation_group_title(group_implementations)})",
+                        f"{default_slug}_{implementation_group_slug(group_implementations)}",
                         group_records,
                     )
                 )
