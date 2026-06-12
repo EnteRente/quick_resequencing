@@ -560,7 +560,7 @@ def plot_scenario_series(
             trend_x,
             trend_y,
             linestyle="--",
-            linewidth=0.8,
+            linewidth=1.05,
             color=color,
             alpha=0.55,
             zorder=1,
@@ -649,7 +649,7 @@ def create_scenario_figure(
             [0],
             color=IMPLEMENTATION_COLORS.get(implementation, "#8D99AE"),
             linestyle="--",
-            linewidth=0.8,
+            linewidth=1.05,
             marker="s",
             markersize=8,
             markerfacecolor=IMPLEMENTATION_COLORS.get(implementation, "#8D99AE"),
@@ -661,7 +661,7 @@ def create_scenario_figure(
     fig.legend(
         handles=legend_handles,
         loc="upper center",
-        bbox_to_anchor=(0.56, 0.905),
+        bbox_to_anchor=(0.56, 0.88),
         frameon=False,
         ncol=len(legend_handles),
         columnspacing=1.4,
@@ -670,7 +670,7 @@ def create_scenario_figure(
 
     fig.suptitle(title or scenario_display_title(scenario, records), fontsize=15, x=0.12, y=0.985, ha="left")
     fig.text(0.12, 0.945, group, fontsize=9, color="#5C5C5C", ha="left")
-    fig.tight_layout(rect=(0.06, 0.18, 0.99, 0.84))
+    fig.tight_layout(rect=(0.06, 0.18, 0.99, 0.845))
     return fig
 
 
