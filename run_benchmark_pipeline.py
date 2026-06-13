@@ -48,6 +48,7 @@ SCHEME_ALIASES = {
 IMPLEMENTATION_ORDER = ["quiche", "quic-go", "linux_tcp", "s2n-quic", "lsquic"]
 PERF_COUNTER_IMPLEMENTATION_ORDER = ["s2n-quic", "linux_tcp", "quiche", "quic-go"]
 DEFAULT_PERF_COUNTER_EVENTS = ["cycles", "cache-misses"]
+DEFAULT_PERF_RECORD_OPTIONS = ["--call-graph", "fp", "-F", "999"]
 PERF_COUNTER_SCHEMES = ["RandomLossRate", "RandomLoss"]
 RANDOM_LOSS_RATE_PERCENTAGES = list(range(1, 11))
 IMPLEMENTATION_ALIASES = {
@@ -744,6 +745,7 @@ def run_perf_record(
 ) -> dict[str, str]:
     perf_command: list[Union[str, os.PathLike[str]]] = perf_command_prefix(sudo_perf, env)
     perf_command.append("record")
+    perf_command.extend(DEFAULT_PERF_RECORD_OPTIONS)
     for event in perf_events:
         perf_command.extend(["-e", event])
 
@@ -760,6 +762,7 @@ def run_perf_record(
     return {
         "perf_data_path": str(perf_data_path),
         "perf_report_path": str(perf_report_path),
+        "perf_record_options": " ".join(DEFAULT_PERF_RECORD_OPTIONS),
     }
 
 
