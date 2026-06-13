@@ -195,7 +195,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sudo-perf",
         action="store_true",
-        help="Prefix only the perf stat/record command with sudo; do not run the whole pipeline as root.",
+        help=(
+            "Prefix only perf stat/record/report commands with sudo; "
+            "do not run the whole pipeline as root."
+        ),
     )
     parser.add_argument(
         "--perf-output-dir",
@@ -730,16 +733,9 @@ def run_perf_record(
     perf_report_path = perf_output_dir / "perf_report.txt"
     perf_command.extend(["-o", perf_data_path, bench_binary, *bench_args])
     run_command(perf_command, env=env)
-    report_command = [perf_executable(), "report", "--stdio", "-i", os.fspath(perf_data_path)]
-    display = " ".join(shlex.quote(part) for part in report_command)
-    print(f"[run] {display}")
-    report_result = subprocess.run(
-        report_command,
-        cwd=REPO_ROOT,
-        check=True,
-        text=True,
-        stdout=subprocess.PIPE,
-    )
+    report_command: list[Union[str, os.PathLike[str]]] = perf_command_prefix(sudo_perf, env)
+    report_command.extend(["report", "--stdio", "-i", perf_data_path])
+    report_result = run_command(report_command, capture_output=True, env=env)
     print(report_result.stdout, end="")
     perf_report_path.write_text(report_result.stdout, encoding="utf-8")
     return {
