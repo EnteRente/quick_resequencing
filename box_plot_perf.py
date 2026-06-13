@@ -7,6 +7,7 @@ import csv
 import os
 import re
 from pathlib import Path
+from statistics import median
 
 cache_root = Path("target/.cache").resolve()
 cache_root.mkdir(parents=True, exist_ok=True)
@@ -48,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("target/perf_artifacts/plots"),
+        default=Path("target/perf_artifacts"),
         help="Directory where perf counter plot PDFs will be written.",
     )
     return parser.parse_args()
@@ -76,10 +77,23 @@ def perf_event_slug(event: str) -> str:
 
 def perf_event_axis_label(event: str) -> str:
     labels = {
-        "cycles": "CPU cycles per packet",
-        "cache-misses": "Cache misses per packet",
+        "cycles": "CPU cycles per burst",
+        "cache-misses": "Cache misses per burst",
     }
-    return labels.get(event, f"{event} per packet")
+    return labels.get(event, f"{event} per burst")
+
+
+def counter_value_per_burst(row: dict[str, str]) -> float:
+    if row.get("count_per_burst"):
+        return float(row["count_per_burst"])
+
+    if row.get("raw_count") and row.get("timed_iterations"):
+        timed_iterations = float(row["timed_iterations"])
+        if timed_iterations <= 0.0:
+            raise ValueError("timed_iterations must be greater than zero")
+        return float(row["raw_count"]) / timed_iterations
+
+    return float(row["count_per_packet"]) * float(row["packet_count"])
 
 
 def read_rows(input_path: Path) -> list[dict[str, str]]:
@@ -129,14 +143,15 @@ def plot_perf_counter_boxplots(samples_csv: Path, output_dir: Path) -> list[Path
         }
 
         for event in events:
-            fig, ax = plt.subplots(figsize=(max(10.0, 5.8 + len(x_values) * 0.8), 6.2))
+            fig, ax = plt.subplots(figsize=(max(10.0, 5.8 + len(x_values) * 0.8), 6.4))
 
             for implementation in implementations:
                 datasets: list[list[float]] = []
                 positions: list[float] = []
+                trend_y: list[float] = []
                 for x_value in x_values:
                     values = [
-                        float(row["count_per_packet"])
+                        counter_value_per_burst(row)
                         for row in scheme_rows
                         if row["event"] == event
                         and row["implementation"] == implementation
@@ -150,6 +165,7 @@ def plot_perf_counter_boxplots(samples_csv: Path, output_dir: Path) -> list[Path
                         continue
                     datasets.append(values)
                     positions.append(x_positions[x_value] + offsets[implementation])
+                    trend_y.append(median(values))
 
                 if not datasets:
                     continue
@@ -173,8 +189,23 @@ def plot_perf_counter_boxplots(samples_csv: Path, output_dir: Path) -> list[Path
                     capprops={"color": "#1F1F1F", "linewidth": 1.8},
                     medianprops={"color": "#F7F7F7", "linewidth": 2.4},
                 )
+                ax.plot(
+                    positions,
+                    trend_y,
+                    linestyle=":",
+                    linewidth=1.15,
+                    color=color,
+                    alpha=0.75,
+                    zorder=4,
+                )
 
-            ax.set_title(f"{title} perf counters {title_suffix}", loc="left", fontsize=15)
+            fig.suptitle(
+                f"{title} perf counters {title_suffix}",
+                fontsize=15,
+                x=0.08,
+                y=0.985,
+                ha="left",
+            )
             ax.set_xlabel(x_label)
             ax.set_ylabel(perf_event_axis_label(event))
             ax.set_xticks([x_positions[value] for value in x_values])
@@ -190,7 +221,8 @@ def plot_perf_counter_boxplots(samples_csv: Path, output_dir: Path) -> list[Path
                     [0],
                     color=IMPLEMENTATION_COLORS.get(implementation, "#8D99AE"),
                     marker="s",
-                    linestyle="",
+                    linestyle=":",
+                    linewidth=1.15,
                     markersize=8,
                     markerfacecolor=IMPLEMENTATION_COLORS.get(implementation, "#8D99AE"),
                     markeredgecolor="#1F1F1F",
@@ -198,16 +230,16 @@ def plot_perf_counter_boxplots(samples_csv: Path, output_dir: Path) -> list[Path
                 )
                 for implementation in implementations
             ]
-            ax.legend(
+            fig.legend(
                 handles=legend_handles,
                 loc="upper center",
-                bbox_to_anchor=(0.5, 1.08),
+                bbox_to_anchor=(0.56, 0.93),
                 frameon=False,
                 ncol=len(legend_handles),
                 columnspacing=1.4,
                 handletextpad=0.5,
             )
-            fig.tight_layout()
+            fig.tight_layout(rect=(0.06, 0.08, 0.99, 0.86))
 
             output_path = output_dir / f"perf_{slug}_{perf_event_slug(event)}.pdf"
             fig.savefig(output_path, bbox_inches="tight")

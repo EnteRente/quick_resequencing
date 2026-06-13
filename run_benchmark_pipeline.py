@@ -367,6 +367,16 @@ def perf_command_prefix(sudo_perf: bool, env: dict[str, str]) -> list[str]:
     return command
 
 
+def restore_sudo_output_ownership(path: Path, sudo_perf: bool) -> None:
+    if not sudo_perf or running_as_root():
+        return
+    if not hasattr(os, "getuid") or not hasattr(os, "getgid"):
+        return
+
+    owner = f"{os.getuid()}:{os.getgid()}"
+    run_command(["sudo", "chown", owner, path])
+
+
 def normalize_selected_schemes(raw_schemes: Sequence[str]) -> list[str]:
     if not raw_schemes:
         return []
@@ -599,6 +609,13 @@ def run_benchmark(bench_name: str, env: dict[str, str]) -> None:
     run_command(["cargo", "bench", "--bench", bench_name], env=env)
 
 
+def criterion_bench_args(bench_filter: Optional[str] = None) -> list[str]:
+    args = ["--bench"]
+    if bench_filter:
+        args.append(bench_filter)
+    return args
+
+
 def build_bench_binary(bench_name: str) -> Path:
     command = [
         "cargo",
@@ -713,6 +730,7 @@ def run_perf_stat(
     perf_stat_path = perf_output_dir / "perf_stat.txt"
     perf_command.extend(["-d", "-d", "-d", "-o", perf_stat_path, bench_binary, *bench_args])
     run_command(perf_command, env=env)
+    restore_sudo_output_ownership(perf_stat_path, sudo_perf)
     return {"perf_stat_path": str(perf_stat_path)}
 
 
@@ -736,6 +754,7 @@ def run_perf_record(
     report_command: list[Union[str, os.PathLike[str]]] = perf_command_prefix(sudo_perf, env)
     report_command.extend(["report", "--stdio", "-i", perf_data_path])
     report_result = run_command(report_command, capture_output=True, env=env)
+    restore_sudo_output_ownership(perf_data_path, sudo_perf)
     print(report_result.stdout, end="")
     perf_report_path.write_text(report_result.stdout, encoding="utf-8")
     return {
@@ -834,6 +853,7 @@ def run_perf_stat_counter_sample(
     perf_stat_path.parent.mkdir(parents=True, exist_ok=True)
     perf_command.extend(["-x", ",", "-o", perf_stat_path, "--", bench_binary, *bench_args])
     run_command(perf_command, env=env)
+    restore_sudo_output_ownership(perf_stat_path, sudo_perf)
     counters = parse_perf_stat_counter_values(perf_stat_path)
     missing_events = [event for event in perf_events if event not in counters]
     if missing_events:
@@ -953,7 +973,7 @@ def run_perf_counter_boxplot_suite(
             [scenario.implementation],
             [scenario.packet_count],
         )
-        bench_args = [scenario.bench_filter]
+        bench_args = criterion_bench_args(scenario.bench_filter)
         scenario_metadata: dict[str, str] = {
             "implementation": scenario.implementation,
             "scheme": scenario.scheme,
@@ -1020,6 +1040,7 @@ def run_perf_counter_boxplot_suite(
                         "raw_count": f"{raw_count:.12g}",
                         "timed_iterations": f"{timed_iterations:.12g}",
                         "measured_packets": f"{measured_packets:.12g}",
+                        "count_per_burst": f"{raw_count / timed_iterations:.12g}",
                         "count_per_packet": f"{raw_count / measured_packets:.12g}",
                         "perf_stat_path": os.fspath(relative_stat_path),
                     }
@@ -1052,6 +1073,7 @@ def run_perf_counter_boxplot_suite(
         "raw_count",
         "timed_iterations",
         "measured_packets",
+        "count_per_burst",
         "count_per_packet",
         "perf_stat_path",
     ]
@@ -1063,7 +1085,7 @@ def run_perf_counter_boxplot_suite(
     plot_paths = run_perf_counter_plotter(
         python_executable,
         samples_csv,
-        perf_output_dir / "plots",
+        perf_output_dir,
     )
 
     (perf_output_dir / "perf_index.json").write_text(
@@ -1090,7 +1112,7 @@ def run_perf_benchmark(
 ) -> dict[str, str]:
     bench_binary = build_bench_binary(bench_name)
     clean_directory(perf_output_dir)
-    bench_args = [bench_filter] if bench_filter else []
+    bench_args = criterion_bench_args(bench_filter)
 
     metadata = {
         "bench_binary": str(bench_binary),
@@ -1144,7 +1166,7 @@ def run_perf_benchmarks_by_implementation(
         implementation_dir_name = safe_path_component(implementation)
         implementation_dir = perf_output_dir / implementation_dir_name
         implementation_dir.mkdir(parents=True, exist_ok=True)
-        bench_args = [implementation]
+        bench_args = criterion_bench_args(implementation)
         implementation_env = dict(env)
         implementation_env[BENCH_IMPLEMENTATIONS_ENV_VAR] = implementation
         result_dirs.append(implementation_dir_name)
@@ -1242,7 +1264,7 @@ def run_perf_benchmarks_by_scenario(
         scenario_env[BENCH_SCHEMES_ENV_VAR] = scheme
         scenario_env[BENCH_BURST_SIZES_ENV_VAR] = str(packet_count)
         scenario_env[BENCH_PACKET_COUNTS_ENV_VAR] = str(packet_count)
-        bench_args = [implementation]
+        bench_args = criterion_bench_args(implementation)
 
         scenario_metadata = dict(metadata)
         scenario_metadata.update(
@@ -1423,6 +1445,36 @@ def publish_perf_artifacts(
     return run_dir, latest_dir
 
 
+def publish_perf_plot_files(
+    perf_output_dir: Path,
+    publish_dir: Path,
+    metadata: dict[str, str],
+) -> Optional[Path]:
+    plot_file_names = [
+        file_name
+        for file_name in metadata.get("perf_counter_plot_files", "").split(",")
+        if file_name
+    ]
+    if not plot_file_names:
+        return None
+
+    latest_plot_dir = publish_dir / "latest" / "plots"
+    latest_plot_dir.mkdir(parents=True, exist_ok=True)
+
+    for existing_plot in latest_plot_dir.glob("perf_*.pdf"):
+        existing_plot.unlink()
+
+    for plot_file_name in plot_file_names:
+        source_path = perf_output_dir / plot_file_name
+        if not source_path.exists():
+            raise FileNotFoundError(f"Perf plot PDF not found: {source_path}")
+        shutil.copy2(source_path, latest_plot_dir / source_path.name)
+
+    metadata_path = latest_plot_dir / "perf_run_metadata.json"
+    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    return latest_plot_dir
+
+
 def main() -> int:
     args = parse_args()
     ensure_nix_dev_shell(args)
@@ -1573,6 +1625,10 @@ def main() -> int:
         print("[done] Published perf artifacts:")
         print(f"  latest: {perf_latest_dir}")
         print(f"  archived: {perf_run_dir}")
+        perf_plot_dir = publish_perf_plot_files(perf_output_dir, publish_dir, metadata)
+        if perf_plot_dir is not None:
+            print("[done] Published perf plots:")
+            print(f"  latest: {perf_plot_dir}")
     return 0
 
 
