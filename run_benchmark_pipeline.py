@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import importlib.util
 import os
@@ -11,6 +12,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Sequence, Union
@@ -19,6 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 BENCH_RES_DIR_PATH = REPO_ROOT / "benchmark_results"
 FLAKE_FILE_PATH = REPO_ROOT / "flake.nix"
 PLOTTER_FILE_PATH = REPO_ROOT / "box_plotter.py"
+PERF_PLOTTER_FILE_PATH = REPO_ROOT / "box_plot_perf.py"
 PIPELINE_FILE_PATH = REPO_ROOT / "run_benchmark_pipeline.py"
 
 NIX_DEV_ENV_VAR = "QUICK_RESEQUENCING_NIX_DEV"
@@ -43,6 +46,10 @@ SCHEME_ALIASES = {
     "random_loss_rate": "RandomLossRate",
 }
 IMPLEMENTATION_ORDER = ["quiche", "quic-go", "linux_tcp", "s2n-quic", "lsquic"]
+PERF_COUNTER_IMPLEMENTATION_ORDER = ["s2n-quic", "linux_tcp", "quiche", "quic-go"]
+DEFAULT_PERF_COUNTER_EVENTS = ["cycles", "cache-misses"]
+PERF_COUNTER_SCHEMES = ["RandomLossRate", "RandomLoss"]
+RANDOM_LOSS_RATE_PERCENTAGES = list(range(1, 11))
 IMPLEMENTATION_ALIASES = {
     "quiche": "quiche",
     "quicgo": "quic-go",
@@ -58,6 +65,17 @@ IMPLEMENTATION_ALIASES = {
 }
 MIN_PYTHON = (3, 9, 0)
 MIN_RUST = (1, 85, 0)
+
+
+@dataclass(frozen=True)
+class PerfCounterScenario:
+    implementation: str
+    scheme: str
+    packet_count: int
+    loss_rate_percent: int
+    criterion_value: str
+    bench_filter: str
+    result_dir: Path
 
 
 def parse_args() -> argparse.Namespace:
@@ -136,6 +154,21 @@ def parse_args() -> argparse.Namespace:
         "--perf-by-scenario",
         action="store_true",
         help="Run perf separately for each implementation, scheme, and burst size.",
+    )
+    parser.add_argument(
+        "--perf-counter-boxplots",
+        action="store_true",
+        help=(
+            "Run the dedicated perf counter suite for RandomLoss and RandomLossRate, "
+            "then render cycles/cache-misses box plots from repeated perf stat samples. "
+            "Use --perf record or --perf both to also keep perf record profiles."
+        ),
+    )
+    parser.add_argument(
+        "--perf-counter-samples",
+        type=int,
+        default=3,
+        help="Number of repeated perf stat samples per perf-counter boxplot data point.",
     )
     parser.add_argument(
         "--implementation",
@@ -443,6 +476,37 @@ def selected_or_default_packet_counts(selected_packet_counts: Sequence[int]) -> 
     return list(selected_packet_counts) if selected_packet_counts else list(PACKET_COUNT_ORDER)
 
 
+def selected_or_default_perf_counter_implementations(
+    selected_implementations: Sequence[str],
+) -> list[str]:
+    if not selected_implementations:
+        return list(PERF_COUNTER_IMPLEMENTATION_ORDER)
+
+    ordered = [
+        implementation
+        for implementation in PERF_COUNTER_IMPLEMENTATION_ORDER
+        if implementation in selected_implementations
+    ]
+    ordered.extend(
+        implementation
+        for implementation in selected_implementations
+        if implementation not in ordered
+    )
+    return ordered
+
+
+def selected_or_default_perf_counter_schemes(selected_schemes: Sequence[str]) -> list[str]:
+    if not selected_schemes:
+        return list(PERF_COUNTER_SCHEMES)
+
+    selected = [scheme for scheme in PERF_COUNTER_SCHEMES if scheme in selected_schemes]
+    if not selected:
+        raise RuntimeError(
+            "--perf-counter-boxplots only supports RandomLoss and RandomLossRate."
+        )
+    return selected
+
+
 def packet_counts_for_scheme(scheme: str, packet_counts: Sequence[int]) -> list[int]:
     if scheme == "RandomLossRate":
         return (
@@ -682,6 +746,341 @@ def run_perf_record(
         "perf_data_path": str(perf_data_path),
         "perf_report_path": str(perf_report_path),
     }
+
+
+def build_perf_counter_scenarios(
+    implementations: Sequence[str],
+    schemes: Sequence[str],
+    packet_counts: Sequence[int],
+) -> list[PerfCounterScenario]:
+    scenarios: list[PerfCounterScenario] = []
+
+    for implementation in implementations:
+        if "RandomLossRate" in schemes:
+            for loss_rate_percent in RANDOM_LOSS_RATE_PERCENTAGES:
+                loss_label = f"RandomLoss with {loss_rate_percent}% loss"
+                criterion_value = f"{loss_label}/{RANDOM_LOSS_RATE_PACKET_COUNT}"
+                relative_dir = (
+                    Path(safe_path_component(implementation))
+                    / "RandomLossRate"
+                    / f"loss_{loss_rate_percent:02d}"
+                    / f"packets_{RANDOM_LOSS_RATE_PACKET_COUNT}"
+                )
+                scenarios.append(
+                    PerfCounterScenario(
+                        implementation=implementation,
+                        scheme="RandomLossRate",
+                        packet_count=RANDOM_LOSS_RATE_PACKET_COUNT,
+                        loss_rate_percent=loss_rate_percent,
+                        criterion_value=criterion_value,
+                        bench_filter=f"{implementation}/{criterion_value}",
+                        result_dir=relative_dir,
+                    )
+                )
+
+        if "RandomLoss" in schemes:
+            for packet_count in packet_counts:
+                criterion_value = f"RandomLoss/{packet_count}"
+                relative_dir = (
+                    Path(safe_path_component(implementation))
+                    / "RandomLoss"
+                    / f"packets_{packet_count}"
+                )
+                scenarios.append(
+                    PerfCounterScenario(
+                        implementation=implementation,
+                        scheme="RandomLoss",
+                        packet_count=packet_count,
+                        loss_rate_percent=1,
+                        criterion_value=criterion_value,
+                        bench_filter=f"{implementation}/{criterion_value}",
+                        result_dir=relative_dir,
+                    )
+                )
+
+    return scenarios
+
+
+def parse_perf_stat_counter_values(perf_stat_path: Path) -> dict[str, float]:
+    counters: dict[str, float] = {}
+    with perf_stat_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle)
+        for row in reader:
+            if len(row) < 3 or not row[0] or row[0].startswith("#"):
+                continue
+
+            raw_value = row[0].strip()
+            event = row[2].strip()
+            if not event or raw_value.startswith("<"):
+                continue
+
+            try:
+                counters[event] = float(raw_value)
+            except ValueError:
+                continue
+
+    return counters
+
+
+def run_perf_stat_counter_sample(
+    bench_binary: Path,
+    perf_events: Sequence[str],
+    perf_stat_path: Path,
+    env: dict[str, str],
+    sudo_perf: bool,
+    bench_args: Sequence[str],
+) -> dict[str, float]:
+    perf_command: list[Union[str, os.PathLike[str]]] = perf_command_prefix(sudo_perf, env)
+    perf_command.append("stat")
+    for event in perf_events:
+        perf_command.extend(["-e", event])
+
+    perf_stat_path.parent.mkdir(parents=True, exist_ok=True)
+    perf_command.extend(["-x", ",", "-o", perf_stat_path, "--", bench_binary, *bench_args])
+    run_command(perf_command, env=env)
+    counters = parse_perf_stat_counter_values(perf_stat_path)
+    missing_events = [event for event in perf_events if event not in counters]
+    if missing_events:
+        missing = ", ".join(missing_events)
+        raise RuntimeError(f"perf stat did not report counters for: {missing}")
+    return counters
+
+
+def criterion_timed_iterations(
+    criterion_root: Path,
+    group: str,
+    implementation: str,
+    criterion_value: str,
+) -> float:
+    for benchmark_path in sorted(criterion_root.rglob("benchmark.json")):
+        if benchmark_path.parent.name != "new":
+            continue
+
+        sample_path = benchmark_path.with_name("sample.json")
+        if not sample_path.exists():
+            continue
+
+        benchmark = json.loads(benchmark_path.read_text(encoding="utf-8"))
+        if benchmark.get("group_id") != group:
+            continue
+        if benchmark.get("function_id") != implementation:
+            continue
+        if benchmark.get("value_str") != criterion_value:
+            continue
+
+        sample = json.loads(sample_path.read_text(encoding="utf-8"))
+        return sum(float(iterations) for iterations in sample["iters"])
+
+    raise RuntimeError(
+        "Could not find Criterion sample output for "
+        f"{group}/{implementation}/{criterion_value} under {criterion_root}."
+    )
+
+
+def run_perf_counter_plotter(
+    python_executable: Path,
+    samples_csv: Path,
+    output_dir: Path,
+) -> list[Path]:
+    if not PERF_PLOTTER_FILE_PATH.exists():
+        raise FileNotFoundError(f"Perf plotter script not found: {PERF_PLOTTER_FILE_PATH}")
+
+    command: list[Union[str, os.PathLike[str]]] = [
+        python_executable,
+        PERF_PLOTTER_FILE_PATH,
+        "--input",
+        samples_csv,
+        "--output-dir",
+        output_dir,
+    ]
+    run_command(command)
+
+    plot_paths = sorted(output_dir.glob("*.pdf"))
+    if not plot_paths:
+        raise RuntimeError(f"No perf counter plot PDFs found in {output_dir}")
+    return plot_paths
+
+
+def run_perf_counter_boxplot_suite(
+    bench_name: str,
+    perf_mode: str,
+    perf_events: Sequence[str],
+    perf_output_dir: Path,
+    criterion_root: Path,
+    group: str,
+    python_executable: Path,
+    sudo_perf: bool,
+    implementations: Sequence[str],
+    schemes: Sequence[str],
+    packet_counts: Sequence[int],
+    sample_count: int,
+) -> dict[str, str]:
+    if sample_count <= 0:
+        raise ValueError("--perf-counter-samples must be greater than zero.")
+
+    events = list(perf_events) if perf_events else list(DEFAULT_PERF_COUNTER_EVENTS)
+    selected_implementations = selected_or_default_perf_counter_implementations(implementations)
+    selected_schemes = selected_or_default_perf_counter_schemes(schemes)
+    selected_packet_counts = selected_or_default_packet_counts(packet_counts)
+    scenarios = build_perf_counter_scenarios(
+        selected_implementations,
+        selected_schemes,
+        selected_packet_counts,
+    )
+    if not scenarios:
+        raise RuntimeError("No perf counter scenarios were selected.")
+
+    bench_binary = build_bench_binary(bench_name)
+    clean_directory(perf_output_dir)
+    metadata = {
+        "bench_binary": str(bench_binary),
+        "perf_mode": perf_mode,
+        "sudo_perf": str(sudo_perf),
+        "perf_counter_boxplots": "true",
+        "perf_counter_samples": str(sample_count),
+        "perf_events": ",".join(events),
+        "perf_implementations": ",".join(selected_implementations),
+        "perf_schemes": ",".join(selected_schemes),
+        "perf_packet_counts": ",".join(str(count) for count in selected_packet_counts),
+    }
+    metadata.update(archive_perf_context(perf_output_dir, bench_binary))
+
+    sample_rows: list[dict[str, str]] = []
+    index_entries: list[dict[str, str]] = []
+
+    for scenario in scenarios:
+        scenario_dir = perf_output_dir / scenario.result_dir
+        scenario_dir.mkdir(parents=True, exist_ok=True)
+
+        scenario_env = benchmark_env(
+            [scenario.scheme],
+            [scenario.implementation],
+            [scenario.packet_count],
+        )
+        bench_args = [scenario.bench_filter]
+        scenario_metadata: dict[str, str] = {
+            "implementation": scenario.implementation,
+            "scheme": scenario.scheme,
+            "packet_count": str(scenario.packet_count),
+            "loss_rate_percent": str(scenario.loss_rate_percent),
+            "criterion_value": scenario.criterion_value,
+            "criterion_filter": scenario.bench_filter,
+            "perf_output_dir": str(scenario_dir),
+        }
+
+        if perf_mode in {"record", "both"}:
+            scenario_metadata.update(
+                run_perf_record(
+                    bench_binary,
+                    events,
+                    scenario_dir,
+                    scenario_env,
+                    sudo_perf,
+                    bench_args,
+                )
+            )
+
+        stat_sample_paths: list[str] = []
+        for sample_index in range(1, sample_count + 1):
+            perf_stat_path = (
+                scenario_dir
+                / "stat_samples"
+                / f"perf_stat_sample_{sample_index:02d}.csv"
+            )
+            counters = run_perf_stat_counter_sample(
+                bench_binary,
+                events,
+                perf_stat_path,
+                scenario_env,
+                sudo_perf,
+                bench_args,
+            )
+            timed_iterations = criterion_timed_iterations(
+                criterion_root,
+                group,
+                scenario.implementation,
+                scenario.criterion_value,
+            )
+            measured_packets = timed_iterations * float(scenario.packet_count)
+            if measured_packets <= 0.0:
+                raise RuntimeError(
+                    f"Criterion reported no timed iterations for {scenario.bench_filter}."
+                )
+
+            relative_stat_path = perf_stat_path.relative_to(perf_output_dir)
+            stat_sample_paths.append(os.fspath(relative_stat_path))
+            for event in events:
+                raw_count = counters[event]
+                sample_rows.append(
+                    {
+                        "implementation": scenario.implementation,
+                        "scheme": scenario.scheme,
+                        "packet_count": str(scenario.packet_count),
+                        "loss_rate_percent": str(scenario.loss_rate_percent),
+                        "criterion_value": scenario.criterion_value,
+                        "criterion_filter": scenario.bench_filter,
+                        "event": event,
+                        "sample_index": str(sample_index),
+                        "raw_count": f"{raw_count:.12g}",
+                        "timed_iterations": f"{timed_iterations:.12g}",
+                        "measured_packets": f"{measured_packets:.12g}",
+                        "count_per_packet": f"{raw_count / measured_packets:.12g}",
+                        "perf_stat_path": os.fspath(relative_stat_path),
+                    }
+                )
+
+        scenario_metadata["perf_stat_samples"] = ",".join(stat_sample_paths)
+        metadata_path = scenario_dir / "run_metadata.json"
+        metadata_path.write_text(
+            json.dumps(scenario_metadata, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        index_entry = dict(scenario_metadata)
+        index_entry["result_dir"] = os.fspath(scenario.result_dir)
+        if perf_mode in {"record", "both"}:
+            index_entry["perf_data_path"] = os.fspath(scenario.result_dir / "perf.data")
+            index_entry["perf_report_path"] = os.fspath(scenario.result_dir / "perf_report.txt")
+        index_entries.append(index_entry)
+
+    samples_csv = perf_output_dir / "perf_counter_samples.csv"
+    fieldnames = [
+        "implementation",
+        "scheme",
+        "packet_count",
+        "loss_rate_percent",
+        "criterion_value",
+        "criterion_filter",
+        "event",
+        "sample_index",
+        "raw_count",
+        "timed_iterations",
+        "measured_packets",
+        "count_per_packet",
+        "perf_stat_path",
+    ]
+    with samples_csv.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(sample_rows)
+
+    plot_paths = run_perf_counter_plotter(
+        python_executable,
+        samples_csv,
+        perf_output_dir / "plots",
+    )
+
+    (perf_output_dir / "perf_index.json").write_text(
+        json.dumps(index_entries, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    metadata["scenario_count"] = str(len(index_entries))
+    metadata["archived_perf_index"] = "perf_index.json"
+    metadata["perf_counter_samples_csv"] = "perf_counter_samples.csv"
+    metadata["perf_counter_plot_files"] = ",".join(
+        os.fspath(path.relative_to(perf_output_dir)) for path in plot_paths
+    )
+    return metadata
 
 
 def run_perf_benchmark(
@@ -1054,11 +1453,18 @@ def main() -> int:
     )
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    if args.perf == "none" and (args.perf_by_implementation or args.perf_by_scenario):
-        raise RuntimeError("--perf-by-implementation/--perf-by-scenario requires --perf stat, record, or both.")
+    if args.perf == "none" and (
+        args.perf_by_implementation or args.perf_by_scenario or args.perf_counter_boxplots
+    ):
+        raise RuntimeError(
+            "--perf-by-implementation, --perf-by-scenario, and "
+            "--perf-counter-boxplots require --perf stat, record, or both."
+        )
+    if args.perf_counter_samples <= 0:
+        raise RuntimeError("--perf-counter-samples must be greater than zero.")
 
     python_version = verify_python_version()
-    verify_python_dependencies(skip_plot=args.skip_plot)
+    verify_python_dependencies(skip_plot=args.skip_plot and not args.perf_counter_boxplots)
     rustc_version, cargo_version = verify_rust_toolchain()
     verify_perf_support(args.perf, args.sudo_perf)
 
@@ -1073,6 +1479,21 @@ def main() -> int:
     if not args.skip_bench:
         if args.perf == "none":
             run_benchmark(args.bench_name, selected_benchmark_env)
+        elif args.perf_counter_boxplots:
+            perf_metadata = run_perf_counter_boxplot_suite(
+                args.bench_name,
+                args.perf,
+                perf_events,
+                perf_output_dir,
+                criterion_root,
+                args.group,
+                python_executable,
+                args.sudo_perf,
+                selected_implementations,
+                selected_schemes,
+                selected_packet_counts,
+                args.perf_counter_samples,
+            )
         elif args.perf_by_scenario:
             perf_metadata = run_perf_benchmarks_by_scenario(
                 args.bench_name,
