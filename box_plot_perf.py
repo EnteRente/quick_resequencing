@@ -26,6 +26,7 @@ from matplotlib.lines import Line2D
 from matplotlib.ticker import EngFormatter, MaxNLocator
 
 RANDOM_LOSS_RATE_PACKET_COUNT = 10_000
+RANDOM_LOSS_FOCUS_MAX_PACKET_COUNT = 60_000
 PERF_COUNTER_IMPLEMENTATION_ORDER = ["s2n-quic", "linux_tcp", "quiche", "quic-go"]
 IMPLEMENTATION_COLORS = {
     "linux_tcp": "#355070",
@@ -108,13 +109,26 @@ def plot_perf_counter_boxplots(samples_csv: Path, output_dir: Path) -> list[Path
 
     output_dir.mkdir(parents=True, exist_ok=True)
     plot_paths: list[Path] = []
-    scenarios = [
-        ("RandomLossRate", "Random loss rate", "Loss rate"),
-        ("RandomLoss", "Random loss", "Packet burst size"),
+    scenarios: list[tuple[str, str, str, int | None, str | None]] = [
+        ("RandomLossRate", "Random loss rate", "Loss rate", None, None),
+        ("RandomLoss", "Random loss", "Packet burst size", None, None),
+        (
+            "RandomLoss",
+            "Random loss",
+            "Packet burst size",
+            RANDOM_LOSS_FOCUS_MAX_PACKET_COUNT,
+            "random_loss_upto_60000",
+        ),
     ]
 
-    for scheme, title, x_label in scenarios:
+    for scheme, title, x_label, max_packet_count, forced_slug in scenarios:
         scheme_rows = [row for row in rows if row["scheme"] == scheme]
+        if max_packet_count is not None:
+            scheme_rows = [
+                row
+                for row in scheme_rows
+                if int(row["packet_count"]) <= max_packet_count
+            ]
         if not scheme_rows:
             continue
 
@@ -131,8 +145,14 @@ def plot_perf_counter_boxplots(samples_csv: Path, output_dir: Path) -> list[Path
         else:
             x_values = sorted({int(row["packet_count"]) for row in scheme_rows})
             x_labels = {value: f"{value:,}" for value in x_values}
-            title_suffix = "(1% loss probability)"
-            slug = "random_loss"
+            if max_packet_count is None:
+                title_suffix = "(1% loss probability)"
+                slug = "random_loss"
+            else:
+                title_suffix = (
+                    f"(1% loss probability, up to {max_packet_count:,} packets)"
+                )
+                slug = forced_slug or f"random_loss_upto_{max_packet_count}"
 
         x_positions = {value: index for index, value in enumerate(x_values)}
         implementation_count = len(implementations)

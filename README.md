@@ -105,6 +105,8 @@ The pipeline uses these directories:
   latest published `perf` results, including `perf.data` when available
 - `benchmark_results/perf/runs/<timestamp>`
   archived `perf` output for a specific run, plus the built bench binary and git context under `context/`
+- `benchmark_results/latest/plots`
+  latest generated perf counter plot PDFs
 
 ## Linux Perf Runs
 
@@ -168,6 +170,39 @@ Restrict the scenario matrix when you do not need the full run:
 python3 run_benchmark_pipeline.py --perf stat --perf-by-scenario --implementation quiche --scheme RandomLoss --burst-size 10000
 ```
 
+Run the dedicated perf-counter plot suite for `s2n-quic`, Linux TCP, `quiche`, and `quic-go`:
+
+```bash
+python3 run_benchmark_pipeline.py --perf record --perf-counter-boxplots --burst-size all
+```
+
+This suite uses `cycles` and `cache-misses` by default. It archives `perf record`
+profiles for the selected Criterion benchmark filters and collects repeated
+`perf stat` samples for the numeric box plots. The plot inputs are written to
+`benchmark_results/perf/latest/perf_counter_samples.csv`, and `box_plot_perf.py`
+generates the PDFs that the pipeline publishes under `benchmark_results/latest/plots/`.
+The perf plot y-axis is the event count per benchmark iteration, i.e. per full
+packet burst. The perf plotter also emits a focused `RandomLoss` burst-size
+variant that includes burst sizes up to `60,000` packets and excludes the
+`100,000`-packet case.
+
+`perf record` uses `--call-graph fp -F 999` by default so the archived profiles
+include frame-pointer call stacks sampled at 999 Hz. For best call graphs, build
+with frame pointers enabled, for example `RUSTFLAGS="-C force-frame-pointers=yes"`.
+
+Re-render only the perf counter PDFs from an existing CSV:
+
+```bash
+python3 box_plot_perf.py --input benchmark_results/perf/latest/perf_counter_samples.csv --output-dir benchmark_results/latest/plots
+```
+
+By default, `--perf-counter-boxplots` collects three `perf stat` samples per data
+point. Increase this when you need more stable boxes:
+
+```bash
+python3 run_benchmark_pipeline.py --perf record --perf-counter-boxplots --perf-counter-samples 5
+```
+
 When split by implementation, the pipeline sets `QUICK_RESEQUENCING_IMPLEMENTATIONS` so the benchmark harness only registers that implementation. Results are written under implementation-specific folders such as `benchmark_results/perf/latest/quiche/perf_stat.txt` and `benchmark_results/perf/latest/quic-go/perf_stat.txt`.
 
 When split by scenario, the pipeline additionally sets `QUICK_RESEQUENCING_SCHEMES` and `QUICK_RESEQUENCING_BURST_SIZES`. In this benchmark, burst size is the packet-count dimension used in the Criterion IDs. Results are nested by implementation, scheme, and size, for example `benchmark_results/perf/latest/quiche/RandomLoss/packets_10000/perf_stat.txt`. The root `perf_index.json` lists every generated perf artifact.
@@ -175,10 +210,10 @@ When split by scenario, the pipeline additionally sets `QUICK_RESEQUENCING_SCHEM
 In `perf` mode the pipeline:
 
 - builds the Criterion bench executable with `cargo bench --bench resequencing_bench --no-run`
-- runs that bench binary directly under `perf`
+- runs that bench binary directly under `perf`, passing Criterion's `--bench` flag so the executable performs benchmark measurements rather than smoke tests
 - runs one filtered `perf` command per implementation when `--perf-by-implementation` or `--implementation` is used
 - runs one filtered `perf` command per implementation/scheme/size combination when `--perf-by-scenario` is used
-- prefixes only `perf stat`/`perf record` with `sudo` when `--sudo-perf` is set
+- prefixes only `perf stat`/`perf record`/`perf report` with `sudo` when `--sudo-perf` is set
 - runs the benchmark twice when `--perf both` is used: `stat` first, then `record`
 - still writes Criterion results to `target/criterion`
 - still runs `box_plotter.py` afterward so plots are generated from the benchmark output
