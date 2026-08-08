@@ -1,296 +1,127 @@
 # quick_resequencing
 
-Benchmarking resequencing data structures and algorithms from QUIC and TCP implementations.
-The benchmarks are run with `Criterion` and `Rust`.
+Benchmarks receive-side resequencing algorithms from
+[QUIC](https://www.rfc-editor.org/rfc/rfc9000.html) implementations and the
+[Linux TCP receive path](https://github.com/torvalds/linux/blob/master/net/ipv4/tcp_input.c).
+The benchmark harness uses [Criterion.rs](https://bheisler.github.io/criterion.rs/book/)
+and [Rust](https://rust-lang.org/).
 
-## Quic(k) Usage
-Command pipline for running the benchmark pipeline:
+## Quick start
+
+[Nix](https://nixos.org/) with flakes enabled is the recommended environment:
+
 ```bash
 git clone <repo-url>
 cd quick_resequencing
-nix develop -c python3 run_benchmark_pipeline.py [args]
+python3 -m benchmark_tools
 ```
 
-## Nix Development Environment
+The command enters the dev shell from [flake.nix](flake.nix), runs the
+benchmarks, generates PDF plots, and publishes the results. Use
+`--no-nix` only when the current environment already provides Python with
+Matplotlib, Rust 1.85 or newer, and Cargo.
 
-The repository now uses a Nix dev shell as the primary reproducible environment.
-
-The dev shell defined in [flake.nix](/Users/macenti/Documents/thesis_quic/quick_resequencing/flake.nix:1) provides:
-
-- `python3` with `matplotlib`
-- latest stable `rustc` and `cargo` from `rust-overlay`
-- `rustfmt`, `clippy`, and `rust-src`
-- `pkg-config`
-- `git`
-- Linux `perf` on Linux systems
-
-Enter the environment with:
+## Common commands
 
 ```bash
-nix develop
+# Run a subset
+python3 -m benchmark_tools \
+  --implementation quiche \
+  --scheme RandomLoss \
+  --burst-size 10000
+
+# Rebuild plots from existing Criterion output
+python3 -m benchmark_tools --skip-bench
+
+# Show every option
+python3 -m benchmark_tools --help
 ```
 
-The pipeline can also enter this dev shell automatically when run from a normal shell:
+`--implementation`, `--scheme`, and `--burst-size` may be repeated or given
+comma-separated values.
+
+To invoke only the Criterion plotter:
 
 ```bash
-python3 run_benchmark_pipeline.py
+python3 -m benchmark_tools.plotting.criterion \
+  --criterion-root target/criterion \
+  --output-dir target/criterion_packet_boxplots
 ```
 
-The explicit equivalent is:
+## Linux perf
+
+[`perf`](https://perf.wiki.kernel.org/index.php/Main_Page) integration is
+Linux-only:
 
 ```bash
-nix develop -c python3 run_benchmark_pipeline.py
+# Aggregate counters
+python3 -m benchmark_tools --perf stat
+
+# Record a profile and produce a text report
+python3 -m benchmark_tools --perf record
+
+# Measure each implementation separately
+python3 -m benchmark_tools --perf stat --perf-by-implementation
+
+# Measure a selected scenario
+python3 -m benchmark_tools --perf record --perf-by-scenario \
+  --implementation quiche --scheme RandomLoss --burst-size 10000
 ```
 
-The Rust toolchain is resolved through `rust-overlay` as the latest stable release available at the current `flake.lock` revision. For fully reproducible runs, generate and commit `flake.lock`:
+Use `--perf-events` to select counters and `--sudo-perf` when the kernel
+restricts access. Only the `perf` commands are elevated.
+
+### Perf counter boxplots
+
+Collect repeated `cycles` and `cache-misses` samples and generate boxplots:
 
 ```bash
-nix flake update
-nix develop -c rustc --version
+python3 -m benchmark_tools --perf stat --perf-counter-boxplots \
+  --implementation quiche --scheme RandomLoss --burst-size 10000
 ```
 
-To intentionally move only the Rust overlay to a newer stable release later, run `nix flake update rust-overlay`.
-
-## Pipeline Overview
-
-The repository includes an automation script, `run_benchmark_pipeline.py`, that can:
-
-- verify the active Python and Rust toolchains
-- use the Python interpreter from the current shell environment
-- run the Criterion benchmark suite
-- generate plot PDFs with `box_plotter.py`
-- copy the generated plots into an easy-to-find folder under `benchmark_results/`
-- optionally run the benchmark binary under Linux `perf`
-
-The pipeline no longer creates a Python virtual environment or installs pip dependencies itself. By default it re-enters itself through `nix develop` when it is not already inside the dev shell. Use `--no-nix` only when you intentionally want to run with a manually prepared environment that already provides `matplotlib`, `rustc`, and `cargo`.
-
-## Prerequisites
-
-- Nix with flakes enabled
-- Linux `perf` only if you want to use `--perf stat` or `--perf record`
-
-`perf` mode is Linux-only. On macOS, the pipeline will stop early with a clear error if `--perf` is requested.
-
-## Standard Run
-
-Run the full pipeline:
+Use `--perf-counter-samples` to change the default of three samples. To plot an
+existing sample CSV without collecting data again:
 
 ```bash
-python3 run_benchmark_pipeline.py
+python3 -m benchmark_tools.plotting.perf_counters \
+  --input benchmark_results/perf/latest/perf_counter_samples.csv \
+  --output-dir benchmark_results/latest/plots
 ```
 
-This will:
+## Results
 
-- enter the Nix dev shell if needed
-- verify Python and Rust versions
-- run `cargo bench --bench resequencing_bench`
-- generate plots from `target/criterion`
-- copy the plots into `benchmark_results/plots/latest`
+- `target/criterion`: raw Criterion output
+- `target/criterion_packet_boxplots`: generated PDFs
+- `benchmark_results/plots/latest`: latest published plots
+- `benchmark_results/plots/runs/<YYYY-MM-DD_HHMMSS>`: archived plot runs
+- `target/perf_artifacts`: intermediate perf output
+- `benchmark_results/perf/latest`: latest published perf artifacts
+- `benchmark_results/perf/runs/<YYYY-MM-DD_HHMMSS>`: archived perf runs
+- `benchmark_results/latest/plots`: latest perf counter boxplots
 
-## Output Locations
+Each published run includes `run_metadata.json`. Perf recordings also archive
+the benchmark binary and Git context needed to identify the measured build.
 
-The pipeline uses these directories:
+## Benchmarked cases
 
-- `target/criterion`
-  Criterion benchmark output written by the benchmark run
-- `target/criterion_packet_boxplots`
-  PDF files generated by `box_plotter.py`
-- `benchmark_results/plots/latest`
-  latest published plot set
-- `benchmark_results/plots/runs/<timestamp>`
-  archived plot set for a specific run
-- `target/perf_artifacts`
-  raw intermediate `perf` output before publishing
-- `benchmark_results/perf/latest`
-  latest published `perf` results, including `perf.data` when available
-- `benchmark_results/perf/runs/<timestamp>`
-  archived `perf` output for a specific run, plus the built bench binary and git context under `context/`
-- `benchmark_results/latest/plots`
-  latest generated perf counter plot PDFs
+Ordering schemes: `InOrder`, `FirstToLast`, `Shuffle`, `RandomLoss`, and
+`RandomLossRate`.
 
-## Linux Perf Runs
+Implementations:
 
-Run the benchmark binary under `perf stat`:
+- [Linux TCP](https://github.com/torvalds/linux/blob/master/net/ipv4/tcp_input.c)
+- [Cloudflare quiche](https://github.com/cloudflare/quiche)
+- [quic-go](https://github.com/quic-go/quic-go)
+- [AWS s2n-quic](https://github.com/aws/s2n-quic)
+- [LiteSpeed LSQUIC](https://github.com/litespeedtech/lsquic)
+
+## Development
+
+The `benchmark_tools` package separates CLI parsing, pipeline orchestration,
+Criterion parsing and plotting, perf execution, selection, and publishing.
+Run the Python tests with:
 
 ```bash
-python3 run_benchmark_pipeline.py --perf stat
+python3 -m unittest discover -s tests -v
 ```
-
-Run it under `perf record`:
-
-```bash
-python3 run_benchmark_pipeline.py --perf record
-```
-
-Run both `perf stat` and `perf record` under the same pipeline timestamp:
-
-```bash
-python3 run_benchmark_pipeline.py --perf both
-```
-
-If your kernel requires elevated privileges for perf counters, use `--sudo-perf` instead of running the whole pipeline with `sudo`:
-
-```bash
-python3 run_benchmark_pipeline.py --perf stat --sudo-perf
-```
-
-Use a custom event list:
-
-```bash
-python3 run_benchmark_pipeline.py --perf stat --perf-events cycles,instructions,cache-misses,branches,branch-misses
-```
-
-The event option can also be repeated:
-
-```bash
-python3 run_benchmark_pipeline.py --perf stat --perf-events cycles --perf-events instructions --perf-events cache-misses
-```
-
-Run separate `perf` measurements for each implementation:
-
-```bash
-python3 run_benchmark_pipeline.py --perf stat --perf-by-implementation --perf-events cycles,instructions,cache-misses
-```
-
-Run separate measurements for only selected implementations:
-
-```bash
-python3 run_benchmark_pipeline.py --perf stat --implementation quiche --implementation quic-go
-```
-
-Run separate measurements for every implementation, scheme, and burst size:
-
-```bash
-python3 run_benchmark_pipeline.py --perf stat --perf-by-scenario --perf-events cycles,instructions,cache-misses
-```
-
-Restrict the scenario matrix when you do not need the full run:
-
-```bash
-python3 run_benchmark_pipeline.py --perf stat --perf-by-scenario --implementation quiche --scheme RandomLoss --burst-size 10000
-```
-
-Run the dedicated perf-counter plot suite for `s2n-quic`, Linux TCP, `quiche`, and `quic-go`:
-
-```bash
-python3 run_benchmark_pipeline.py --perf record --perf-counter-boxplots --burst-size all
-```
-
-This suite uses `cycles` and `cache-misses` by default. It archives `perf record`
-profiles for the selected Criterion benchmark filters and collects repeated
-`perf stat` samples for the numeric box plots. The plot inputs are written to
-`benchmark_results/perf/latest/perf_counter_samples.csv`, and `box_plot_perf.py`
-generates the PDFs that the pipeline publishes under `benchmark_results/latest/plots/`.
-The perf plot y-axis is the event count per benchmark iteration, i.e. per full
-packet burst. The perf plotter also emits a focused `RandomLoss` burst-size
-variant that includes burst sizes up to `60,000` packets and excludes the
-`100,000`-packet case.
-
-`perf record` uses `--call-graph fp -F 999` by default so the archived profiles
-include frame-pointer call stacks sampled at 999 Hz. For best call graphs, build
-with frame pointers enabled, for example `RUSTFLAGS="-C force-frame-pointers=yes"`.
-
-Re-render only the perf counter PDFs from an existing CSV:
-
-```bash
-python3 box_plot_perf.py --input benchmark_results/perf/latest/perf_counter_samples.csv --output-dir benchmark_results/latest/plots
-```
-
-By default, `--perf-counter-boxplots` collects three `perf stat` samples per data
-point. Increase this when you need more stable boxes:
-
-```bash
-python3 run_benchmark_pipeline.py --perf record --perf-counter-boxplots --perf-counter-samples 5
-```
-
-When split by implementation, the pipeline sets `QUICK_RESEQUENCING_IMPLEMENTATIONS` so the benchmark harness only registers that implementation. Results are written under implementation-specific folders such as `benchmark_results/perf/latest/quiche/perf_stat.txt` and `benchmark_results/perf/latest/quic-go/perf_stat.txt`.
-
-When split by scenario, the pipeline additionally sets `QUICK_RESEQUENCING_SCHEMES` and `QUICK_RESEQUENCING_BURST_SIZES`. In this benchmark, burst size is the packet-count dimension used in the Criterion IDs. Results are nested by implementation, scheme, and size, for example `benchmark_results/perf/latest/quiche/RandomLoss/packets_10000/perf_stat.txt`. The root `perf_index.json` lists every generated perf artifact.
-
-In `perf` mode the pipeline:
-
-- builds the Criterion bench executable with `cargo bench --bench resequencing_bench --no-run`
-- runs that bench binary directly under `perf`, passing Criterion's `--bench` flag so the executable performs benchmark measurements rather than smoke tests
-- runs one filtered `perf` command per implementation when `--perf-by-implementation` or `--implementation` is used
-- runs one filtered `perf` command per implementation/scheme/size combination when `--perf-by-scenario` is used
-- prefixes only `perf stat`/`perf record`/`perf report` with `sudo` when `--sudo-perf` is set
-- runs the benchmark twice when `--perf both` is used: `stat` first, then `record`
-- still writes Criterion results to `target/criterion`
-- still runs `box_plotter.py` afterward so plots are generated from the benchmark output
-- publishes the `perf` artifacts into `benchmark_results/perf/`
-- archives `perf.data` for `record`/`both` runs together with the exact bench binary and git commit/status metadata
-
-## Useful Variants
-
-Re-generate plots from existing Criterion output without re-running the benchmarks:
-
-```bash
-python3 run_benchmark_pipeline.py --skip-bench
-```
-
-Only publish plots that already exist:
-
-```bash
-python3 run_benchmark_pipeline.py --skip-bench --skip-plot
-```
-
-Use a custom publish directory:
-
-```bash
-python3 run_benchmark_pipeline.py --publish-dir my_results
-```
-
-Run without Nix, using your current shell environment as-is:
-
-```bash
-python3 run_benchmark_pipeline.py --no-nix
-```
-
-## Plot Generation Notes
-
-The plotter reads Criterion JSON files from `target/criterion` and writes one or more PDFs per scenario.
-
-The current `box_plotter.py` supports:
-
-- packet-burst-size plots for `InOrder`, including an all-implementation overview plus split views
-- packet-burst-size plots for `FirstToLast`
-- packet-burst-size plots for `Shuffle`, including an all-implementation overview plus split views
-- packet-burst-size plots for `RandomLoss`, including an all-implementation overview plus split views
-- a dedicated random-loss-rate plot where loss rates from `0%` to `10%` are compared, including an all-implementation overview plus split views
-
-The y-axis is linear and the plotted values are time per packet.
-
-## Command Help
-
-For the complete CLI:
-
-```bash
-python3 run_benchmark_pipeline.py --help
-```
-
-## Supported Packet Ordering Schemes
-
-- [x] InOrder
-- [x] FirstToLast
-- [x] Shuffle
-- [x] RandomLoss by packet burst size
-- [x] RandomLoss from 0% to 10%
-- [ ] Overlapping packets
-- [ ] ...
-
-## Supported Implementations
-
-- [x] TCP Linux
-- [x] Cloudflare Quiche
-- [x] quic-go
-- [x] s2n-quic
-- [x] lsquic
-- [ ] ...
-
-## Troubleshooting
-
-- If the pipeline says `nix` is missing, install Nix or run with `--no-nix` from an environment that already has all required tools.
-- If the pipeline says `matplotlib` is missing with `--no-nix`, run without `--no-nix` or enter the Nix dev shell with `nix develop`.
-- If `--perf` fails on macOS, run the pipeline on Linux instead.
-- If plot generation fails after a benchmark run, check that `target/criterion` contains Criterion output such as `benchmark.json` and `sample.json`.
-- If you only want to re-render plots from existing data, use `--skip-bench`.
