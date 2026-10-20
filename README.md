@@ -99,8 +99,7 @@ python3 -m benchmark_tools --help
 
 
 ### Example plot output for the InOrder scenario
-[in-order scenario (PDF)](example_figures/scenario_in_order.pdf).
-See [benchmarking details](docs/benchmarking.md) for profiling and interpretation.
+[InOrder scenario boxplot](example_figures/scenario_in_order.pdf)
 
 
 ## Continue development
